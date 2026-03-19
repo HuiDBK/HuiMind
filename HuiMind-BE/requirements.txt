@@ -1,1 +1,3 @@
-huidevkit=0.6.2
+fastapi==0.112.2
+uvicorn==0.20.0
+huidevkit==0.6.2
