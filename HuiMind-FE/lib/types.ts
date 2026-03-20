@@ -15,6 +15,11 @@ export type ApiResponse<T> = {
   data: T;
 };
 
+export type PageData<T> = {
+  total: number;
+  data_list: T[];
+};
+
 export type UserInfo = {
   id: number;
   email: string;

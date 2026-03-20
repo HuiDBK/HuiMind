@@ -9,6 +9,7 @@ import type {
   InterviewSessionCreateData,
   InterviewSessionDetail,
   LoginData,
+  PageData,
   ResumeDiagnosisData,
   ReviewTaskItem,
   SceneItem,
@@ -62,14 +63,14 @@ export async function getDashboard() {
 }
 
 export async function getScenes() {
-  const data = await request<{ items: SceneItem[] }>("/scenes");
-  return data.items;
+  const data = await request<PageData<SceneItem>>("/scenes");
+  return data.data_list;
 }
 
 export async function getDocuments(sceneId?: string) {
   const query = sceneId ? `?scene_id=${sceneId}` : "";
-  const data = await request<{ items: DocumentItem[] }>(`/documents${query}`);
-  return data.items;
+  const data = await request<PageData<DocumentItem>>(`/documents${query}`);
+  return data.data_list;
 }
 
 export async function mockUploadDocument(payload: {
@@ -118,14 +119,14 @@ export async function chatWithBuddy(payload: { scene_id: string; message: string
 
 export async function getWeakPoints(sceneId?: string) {
   const query = sceneId ? `?scene_id=${sceneId}` : "";
-  const data = await request<{ items: WeakPointItem[] }>(`/memory/weak-points${query}`);
-  return data.items;
+  const data = await request<PageData<WeakPointItem>>(`/memory/weak-points${query}`);
+  return data.data_list;
 }
 
 export async function getReviewTasks(sceneId?: string) {
   const query = sceneId ? `?scene_id=${sceneId}` : "";
-  const data = await request<{ items: ReviewTaskItem[] }>(`/review/tasks${query}`);
-  return data.items;
+  const data = await request<PageData<ReviewTaskItem>>(`/review/tasks${query}`);
+  return data.data_list;
 }
 
 export async function completeReviewTask(taskId: number, result: "mastered" | "review_again") {

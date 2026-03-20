@@ -2,7 +2,19 @@
 
 from fastapi import APIRouter
 
-from src.routes.api_v1 import router as api_v1_router
+from src.routes import auth, buddy, career, dashboard, document, rag, review, scene, system
 
 api_router = APIRouter()
-api_router.include_router(api_v1_router, prefix="/api/v1")
+for router in [
+    system.router,
+    auth.router,
+    dashboard.router,
+    scene.router,
+    document.router,
+    rag.router,
+    buddy.router,
+    review.router,
+    career.router,
+]:
+    api_router.include_router(router)
+
