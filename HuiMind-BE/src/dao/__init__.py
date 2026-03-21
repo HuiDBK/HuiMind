@@ -1,3 +1,5 @@
+from loguru import logger
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from src import settings
 from src.dao.redis import RedisManager
 
@@ -6,20 +8,27 @@ from py_tools.connections.db.mysql.orm_model import BaseOrmTable
 
 
 async def init_orm():
-    """初始化mysql的ORM"""
-    db_client = SQLAlchemyManager(
-        host=settings.mysql_host,
-        port=settings.mysql_port,
-        user=settings.mysql_user,
-        password=settings.mysql_password,
-        db_name=settings.mysql_dbname,
-    )
-    db_client.init_mysql_engine()
+    """初始化sqlite的ORM (模拟 mysql)"""
+    # 使用 sqlite+aiosqlite 模拟
+    db_url = f"sqlite+aiosqlite:///{settings.mysql_dbname}.db"
+    logger.info(f"Initializing SQLite ORM at {db_url}")
+
+    # 构造一个兼容 SQLAlchemyManager 的对象，满足 DBManager.init_db_client 的要求
+    class SQLiteManager:
+        def __init__(self, engine, session_maker):
+            self.db_engine = engine
+            self.async_session_maker = session_maker
+            self.session_options = {"expire_on_commit": False}
+
+    engine = create_async_engine(db_url, echo=True)
+    session_maker = async_sessionmaker(bind=engine, expire_on_commit=False)
+
+    db_client = SQLiteManager(engine, session_maker)
     DBManager.init_db_client(db_client)
     return db_client
 
 
-async def init_orm_tables(db_client: SQLAlchemyManager):
+async def init_orm_tables(db_client):
     """初始化 ORM 表结构"""
     from src.dao.orm import table  # noqa: F401
 
@@ -28,10 +37,13 @@ async def init_orm_tables(db_client: SQLAlchemyManager):
 
 
 async def init_redis():
-    RedisManager.init_redis_client(
-        async_client=True,
-        host=settings.redis_host,
-        port=settings.redis_port,
-        password=settings.redis_password,
-        db=settings.redis_db,
-    )
+    try:
+        RedisManager.init_redis_client(
+            async_client=True,
+            host=settings.redis_host,
+            port=settings.redis_port,
+            password=settings.redis_password,
+            db=settings.redis_db,
+        )
+    except Exception as exc:
+        logger.warning("Redis init skipped: %s", exc)

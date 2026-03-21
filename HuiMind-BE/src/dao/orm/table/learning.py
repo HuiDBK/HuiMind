@@ -15,6 +15,21 @@ class SceneTable(BaseOrmTableWithTS):
     name: Mapped[str] = mapped_column(String(64), comment="场景名称")
     description: Mapped[str] = mapped_column(String(255), comment="场景描述")
     enabled_tools: Mapped[list[str]] = mapped_column(JSON, default=list, comment="启用工具列表")
+    system_prompt: Mapped[str] = mapped_column(Text, default="", comment="系统提示词")
+    skill_prompt: Mapped[str] = mapped_column(Text, default="", comment="场景技能提示词")
+    eval_rubric: Mapped[dict] = mapped_column(JSON, default=dict, comment="评分规则配置")
+
+
+class FileTable(BaseOrmTableWithTS):
+    __tablename__ = "file"
+
+    user_id: Mapped[int] = mapped_column(Integer, index=True, comment="用户ID")
+    scene_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True, comment="场景编码")
+    oss_key: Mapped[str] = mapped_column(String(255), unique=True, index=True, comment="文件唯一标识")
+    original_filename: Mapped[str] = mapped_column(String(255), comment="原始文件名")
+    content_type: Mapped[str] = mapped_column(String(128), default="", comment="文件类型")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0, comment="文件大小字节")
+    storage_backend: Mapped[str] = mapped_column(String(32), default="local", comment="存储后端")
 
 
 class DocumentTable(BaseOrmTableWithTS):
@@ -27,6 +42,8 @@ class DocumentTable(BaseOrmTableWithTS):
     summary: Mapped[str] = mapped_column(String(500), default="", comment="资料摘要")
     source_url: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="来源链接")
     content: Mapped[str | None] = mapped_column(Text, nullable=True, comment="内容全文")
+    file_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True, comment="关联文件ID")
+    oss_key: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True, comment="文件唯一标识")
 
 
 class BuddyProfileTable(BaseOrmTableWithTS):

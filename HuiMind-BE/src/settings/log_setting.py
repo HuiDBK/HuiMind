@@ -1,4 +1,3 @@
-import logging
 import os
 import sys
 
@@ -24,7 +23,7 @@ server_logging_retention = "7 days"
 error_logging_retention = "30 days"
 
 # 项目日志配置
-console_log_level = logging.DEBUG
+console_log_level = "DEBUG"
 log_format = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | {trace_msg} | {name}:{function}:{line} - {message}"
 
 logging_conf = {

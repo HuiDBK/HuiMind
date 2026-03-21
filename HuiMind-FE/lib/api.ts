@@ -22,10 +22,11 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getAuthToken();
+  const isFormData = init?.body instanceof FormData;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
-      "Content-Type": "application/json",
+      ...(!isFormData ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {}),
     },
@@ -73,16 +74,17 @@ export async function getDocuments(sceneId?: string) {
   return data.data_list;
 }
 
-export async function mockUploadDocument(payload: {
-  scene_id: string;
-  doc_type: string;
-  filename: string;
-  source_url?: string;
-}) {
-  return request<{ document_id: number; status: string; filename: string }>(`/documents/upload`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+export async function uploadFile(payload: { scene_id?: string; file: globalThis.File }) {
+  const form = new FormData();
+  form.append("file", payload.file);
+  if (payload.scene_id) {
+    form.append("scene_id", payload.scene_id);
+  }
+  return request<{ file_id: number; oss_key: string; filename: string }>(`/files/upload`, { method: "POST", body: form });
+}
+
+export async function createDocumentFromFile(payload: { scene_id: string; doc_type: string; file_id: number; oss_key: string }) {
+  return request<{ document_id: number; status: string; filename: string }>(`/documents/upload`, { method: "POST", body: JSON.stringify(payload) });
 }
 
 export async function createJd(payload: { scene_id: "career"; title: string; content?: string; source_url?: string }) {

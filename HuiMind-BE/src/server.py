@@ -1,6 +1,6 @@
 """FastAPI server bootstrap."""
 
-import logging
+from loguru import logger
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -10,8 +10,6 @@ from py_tools.connections.db.mysql import DBManager
 from src.dao import init_orm, init_orm_tables, init_redis
 from src.routes import api_router
 from src.services.bootstrap import BootstrapService
-
-logger = logging.getLogger(__name__)
 
 
 async def startup():
@@ -26,13 +24,13 @@ async def startup():
 
 async def shutdown():
     logger.info("Shutting down server")
-    # await DBManager.DB_CLIENT.db_engine.dispose()
+    await DBManager.DB_CLIENT.db_engine.dispose()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     logger.info("Lifespan context manager started")
-    # await startup()
+    await startup()
     yield
     await shutdown()
 
@@ -54,6 +52,10 @@ def create_app() -> FastAPI:
         allow_origins=[
             "http://127.0.0.1:3000",
             "http://localhost:3000",
+            "http://127.0.0.1:3001",
+            "http://localhost:3001",
+            "http://127.0.0.1:3002",
+            "http://localhost:3002",
         ],
         allow_credentials=True,
         allow_methods=["*"],

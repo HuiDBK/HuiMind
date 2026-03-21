@@ -198,6 +198,12 @@ HuiMind-FE/out/
 HuiMind-FE/dist/
 HuiMind-FE/build/
 HuiMind-FE/coverage/
+
+# Local artifacts
+.trae/
+HuiMind-BE/chroma_db/
+HuiMind-BE/uploads/
+HuiMind-BE/task_flow.db
 HuiMind-FE/.turbo/
 HuiMind-FE/.vercel/
 HuiMind-FE/.env.local

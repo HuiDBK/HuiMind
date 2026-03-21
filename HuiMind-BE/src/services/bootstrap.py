@@ -25,9 +25,44 @@ class BootstrapService(BaseService):
         count = await SceneManager().query_one(cols=[func.count()], flat=True) or 0
         if count:
             return
+        base_system_prompt = "你是 HuiMind AI 伴学助手。你需要基于用户上传的资料进行回答，回答必须尽量附带引用来源；资料不足时要明确说明并给出下一步建议。"
         for payload in [
-            {"scene_id": "general", "name": "通用学习", "description": "面向日常自学和资料沉淀的默认学习空间。", "enabled_tools": ["documents", "qa", "memory_review", "buddy"]},
-            {"scene_id": "career", "name": "求职助手", "description": "围绕简历诊断和模拟面试构建的首发官方场景。", "enabled_tools": ["documents", "qa", "memory_review", "buddy", "resume_diagnosis", "interview"]},
+            {
+                "scene_id": "general",
+                "name": "通用学习",
+                "description": "面向日常自学和资料沉淀的默认学习空间。",
+                "enabled_tools": ["search_knowledge", "generate_quiz", "update_weakness", "schedule_review"],
+                "system_prompt": base_system_prompt,
+                "skill_prompt": "优先引导用户上传资料并建立可检索的知识库；回答时以概念梳理 + 可执行练习为主。",
+                "eval_rubric": {},
+            },
+            {
+                "scene_id": "career",
+                "name": "求职助手",
+                "description": "围绕简历诊断和模拟面试构建的首发官方场景。",
+                "enabled_tools": ["search_knowledge", "rubric_evaluate", "generate_quiz", "update_weakness", "schedule_review"],
+                "system_prompt": base_system_prompt,
+                "skill_prompt": "回答更偏实战：可量化表达、STAR 结构、面试官追问；必要时先问澄清问题再给建议。",
+                "eval_rubric": {"type": "STAR", "dimensions": ["situation", "task", "action", "result"]},
+            },
+            {
+                "scene_id": "kaoyan",
+                "name": "考研备考",
+                "description": "围绕真题与错题归纳的备考场景。",
+                "enabled_tools": ["search_knowledge", "generate_quiz", "update_weakness", "schedule_review"],
+                "system_prompt": base_system_prompt,
+                "skill_prompt": "偏应试：题型拆解、真题规律、错因归因与复习节奏。",
+                "eval_rubric": {},
+            },
+            {
+                "scene_id": "gongkao",
+                "name": "考公备考",
+                "description": "围绕申论批改与行测练习的备考场景。",
+                "enabled_tools": ["search_knowledge", "rubric_evaluate", "generate_quiz", "update_weakness", "schedule_review"],
+                "system_prompt": base_system_prompt,
+                "skill_prompt": "申论更重结构与表达，行测更重解题路径；必要时建议联网补充时政。",
+                "eval_rubric": {"type": "essay", "dimensions": ["结构", "立意", "论证", "表达", "规范"]},
+            },
         ]:
             await SceneManager().add(payload)
 

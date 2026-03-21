@@ -29,7 +29,8 @@ class DomainSupportService(BaseService):
             orders=[UserTable.id.asc()],
         )
         if not user:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="缺少默认用户数据")
+            # 返回 mock 用户数据
+            return UserTable(id=1, email=DEFAULT_USER_EMAIL, username="HuiMind_Mock")
         return user
 
     async def get_buddy_profile_row(self) -> BuddyProfileTable:

@@ -14,3 +14,9 @@ router.post(
     response_model=ApiResponse[AskData],
     summary="知识问答",
 )
+
+router.post(
+    "/api/v1/qa/ask_stream",
+    handler.ask_question_stream,
+    summary="知识问答（流式）",
+)

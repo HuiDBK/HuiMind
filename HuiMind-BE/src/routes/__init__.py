@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from src.routes import auth, buddy, career, dashboard, document, rag, review, scene, system
+from src.routes import auth, buddy, career, dashboard, document, file, rag, review, scene, system
 
 api_router = APIRouter()
 for router in [
@@ -10,6 +10,7 @@ for router in [
     auth.router,
     dashboard.router,
     scene.router,
+    file.router,
     document.router,
     rag.router,
     buddy.router,
@@ -17,4 +18,3 @@ for router in [
     career.router,
 ]:
     api_router.include_router(router)
-

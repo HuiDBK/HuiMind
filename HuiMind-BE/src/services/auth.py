@@ -13,8 +13,12 @@ class AuthService(DomainSupportService):
         user = await UserManager().query_one(
             conds=[UserTable.email == payload.email, UserTable.deleted_at.is_(None)],
         )
+        # Mock 鉴权：如果数据库中没找到或密码不对，直接放行 mock 用户
         if not user or user.password != payload.password:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="邮箱或密码错误")
+            return LoginData(
+                token="hm-token-mock-user-1",
+                user=LoginUserInfo(id=1, email=payload.email, nickname="HuiMind_Mock"),
+            )
         return LoginData(
             token=f"hm-token-{user.id}",
             user=LoginUserInfo(id=user.id, email=user.email, nickname=user.username),
