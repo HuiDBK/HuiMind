@@ -64,7 +64,7 @@ class BootstrapService(BaseService):
                 "eval_rubric": {"type": "essay", "dimensions": ["结构", "立意", "论证", "表达", "规范"]},
             },
         ]:
-            await SceneManager().add(payload)
+            await SceneManager().bulk_add([payload])
 
     async def _seed_users(self) -> None:
         count = await UserManager().query_one(cols=[func.count()], flat=True) or 0

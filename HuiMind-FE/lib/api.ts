@@ -87,6 +87,16 @@ export async function createDocumentFromFile(payload: { scene_id: string; doc_ty
   return request<{ document_id: number; status: string; filename: string }>(`/documents/upload`, { method: "POST", body: JSON.stringify(payload) });
 }
 
+export async function mockUploadDocument(payload: { scene_id: string; doc_type: string; filename: string; source_url?: string }) {
+  if (typeof File === "undefined") {
+    throw new Error("当前环境不支持 File API。");
+  }
+  const content = `# ${payload.filename}\n\n来源：${payload.source_url || "mock"}\n\n这是一份用于本地联调的模拟资料。\n`;
+  const file = new File([content], payload.filename, { type: "text/markdown" });
+  const uploaded = await uploadFile({ scene_id: payload.scene_id, file });
+  return createDocumentFromFile({ scene_id: payload.scene_id, doc_type: payload.doc_type, file_id: uploaded.file_id, oss_key: uploaded.oss_key });
+}
+
 export async function createJd(payload: { scene_id: "career"; title: string; content?: string; source_url?: string }) {
   return request<{ document_id: number; status: string; filename: string }>(`/documents/jd`, {
     method: "POST",
@@ -99,6 +109,93 @@ export async function askQuestion(payload: { scene_id: string; session_id?: numb
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export type AskStreamEnvelope =
+  | { code: 0; message: string; data: { type: "status"; session_id: number; content: string } }
+  | { code: 0; message: string; data: { type: "tool_start"; step: number; tool_name: string; input: unknown } }
+  | { code: 0; message: string; data: { type: "tool_end"; step: number; tool_name: string; output: string } }
+  | { code: 0; message: string; data: { type: "token"; content: string } }
+  | { code: 0; message: string; data: { type: "final"; session_id: number; answer: string; citations: AskData["citations"]; insufficient_context: boolean } }
+  | { code: 1; message: string; data: { type: "error"; session_id: number } }
+  | { code: number; message: string; data: Record<string, unknown> };
+
+export async function* askQuestionStream(
+  payload: { scene_id: string; session_id?: number | null; question: string },
+  init?: { signal?: AbortSignal },
+): AsyncGenerator<AskStreamEnvelope, void, void> {
+  const token = getAuthToken();
+  const response = await fetch(`${API_BASE_URL}/qa/ask_stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+    signal: init?.signal,
+  });
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      clearAuthSession();
+    }
+    throw new Error(`请求失败: ${response.status}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("浏览器不支持流式响应。");
+  }
+
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let sepIndex = buffer.indexOf("\n\n");
+    while (sepIndex !== -1) {
+      const rawEvent = buffer.slice(0, sepIndex);
+      buffer = buffer.slice(sepIndex + 2);
+
+      const dataLines = rawEvent
+        .split("\n")
+        .map((line) => line.trimEnd())
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart());
+
+      if (dataLines.length > 0) {
+        const dataText = dataLines.join("\n");
+        try {
+          yield JSON.parse(dataText) as AskStreamEnvelope;
+        } catch {
+          yield { code: 1, message: "解析 SSE 事件失败", data: { type: "error", session_id: 0, raw: dataText } } as AskStreamEnvelope;
+        }
+      }
+
+      sepIndex = buffer.indexOf("\n\n");
+    }
+  }
+}
+
+export function startAskQuestionStream(
+  payload: { scene_id: string; session_id?: number | null; question: string },
+  onEvent: (ev: AskStreamEnvelope) => void,
+  onError?: (err: unknown) => void,
+) {
+  const controller = new AbortController();
+  (async () => {
+    try {
+      for await (const ev of askQuestionStream(payload, { signal: controller.signal })) {
+        onEvent(ev);
+      }
+    } catch (err) {
+      onError?.(err);
+    }
+  })();
+  return () => controller.abort();
 }
 
 export async function getBuddyProfile() {
