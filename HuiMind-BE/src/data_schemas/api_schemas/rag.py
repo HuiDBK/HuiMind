@@ -7,7 +7,7 @@ from src.data_schemas.api_schemas.base import SceneID
 
 class AskRequest(BaseModel):
     scene_id: SceneID
-    session_id: int | None = Field(default=1)
+    session_id: int | None = Field(default=None)
     question: str = Field(examples=["请根据我的资料总结本章重点"])
 
 

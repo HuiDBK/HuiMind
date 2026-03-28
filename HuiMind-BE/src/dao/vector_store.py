@@ -9,6 +9,7 @@
 
 import os
 
+import dashscope
 from langchain_dashscope import DashScopeEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.embeddings.fake import FakeEmbeddings
@@ -34,8 +35,8 @@ class VectorStoreManager:
         if cls._instance is None:
             cls._instance = super(VectorStoreManager, cls).__new__(cls)
             if settings.dashscope_api_key:
+                dashscope.api_key = settings.dashscope_api_key
                 cls._instance.embeddings = DashScopeEmbeddings(
-                    api_key=settings.dashscope_api_key,
                     model=settings.embedding_model_name,
                 )
             else:

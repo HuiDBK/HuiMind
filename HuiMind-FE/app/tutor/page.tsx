@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
-import { askQuestion, chatWithBuddy, updateBuddyProfile } from "@/lib/api";
+import { startAskQuestionStream, type AskStreamEnvelope, updateBuddyProfile } from "@/lib/api";
 import { useMvpData } from "@/hooks/use-mvp-data";
 import { WorkspaceFrame } from "@/components/workspace-frame";
 
@@ -15,17 +15,15 @@ const personaOptions = [
 export default function TutorPage() {
   const { buddyProfile, weakPoints, reviewTasks, documents } = useMvpData("general");
   const [selectedPersona, setSelectedPersona] = useState<"gentle" | "strict" | "energetic" | "calm">(buddyProfile?.persona ?? "strict");
-  const [composer, setComposer] = useState("请结合我的资料，解释一下 RAG 和普通 LLM 提示的区别。");
-  const [lastUserPrompt, setLastUserPrompt] = useState("请结合我昨天上传的文档，解释一下 RAG 和普通 LLM 提示的区别。");
-  const [aiReply, setAiReply] = useState(
-    "你可以把普通 LLM 理解成只依赖自身记忆的专家，它知道很多通用知识，但看不到你最新上传的资料。RAG 则像先去图书馆检索资料，再基于检索到的片段组织回答，因此能把输出建立在你的文档事实上。",
-  );
-  const [citations, setCitations] = useState([
-    { source_label: "[1] Resume_v2.pdf", source_locator: "chunk-3" },
-    { source_label: "[2] Wiki_Intro.html", source_locator: "section-1" },
-  ]);
+  const [composer, setComposer] = useState("");
+  const [lastUserPrompt, setLastUserPrompt] = useState("");
+  const [aiReply, setAiReply] = useState("");
+  const [citations, setCitations] = useState<Array<{ source_label: string; source_locator: string }>>([]);
   const [savingPersona, setSavingPersona] = useState(false);
   const [sending, setSending] = useState(false);
+  const [status, setStatus] = useState("");
+  const [toolSteps, setToolSteps] = useState<Array<{ id: string; type: "start" | "end"; name: string; detail?: string }>>([]);
+  const abortRef = useRef<null | (() => void)>(null);
 
   async function handlePersonaChange(persona: "gentle" | "strict" | "energetic" | "calm") {
     setSelectedPersona(persona);
@@ -40,20 +38,83 @@ export default function TutorPage() {
   async function handleSend(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     const prompt = composer.trim();
-    if (!prompt) return;
+    if (!prompt || sending) return;
+
+    abortRef.current?.();
     setSending(true);
     setLastUserPrompt(prompt);
-    try {
-      const [qa, buddy] = await Promise.all([
-        askQuestion({ scene_id: "general", question: prompt }),
-        chatWithBuddy({ scene_id: "general", message: prompt }),
-      ]);
-      setAiReply(`${qa.answer}\n\n${buddy.reply}`);
-      setCitations(qa.citations.map((c) => ({ source_label: c.source_label, source_locator: c.source_locator })));
-      setComposer("");
-    } finally {
-      setSending(false);
-    }
+    setAiReply("");
+    setCitations([]);
+    setToolSteps([]);
+    setStatus("请求已发送，等待模型响应...");
+
+    const onEvent = (ev: AskStreamEnvelope) => {
+      const data = (ev as AskStreamEnvelope).data as Record<string, unknown>;
+      if (!data || typeof data.type !== "string") return;
+
+      if (data.type === "status") {
+        if (typeof data.content === "string") setStatus(data.content);
+        return;
+      }
+
+      if (data.type === "tool_start") {
+        const toolName = String(data.tool_name ?? "unknown");
+        setToolSteps((prev) => [
+          ...prev,
+          { id: `start-${Date.now()}`, type: "start", name: toolName, detail: JSON.stringify(data.input ?? "").slice(0, 100) },
+        ]);
+        setStatus(`正在调用工具：${toolName}`);
+        return;
+      }
+
+      if (data.type === "tool_end") {
+        const toolName = String(data.tool_name ?? "unknown");
+        setToolSteps((prev) => [
+          ...prev,
+          { id: `end-${Date.now()}`, type: "end", name: toolName, detail: String(data.output ?? "").slice(0, 100) },
+        ]);
+        return;
+      }
+
+      if (data.type === "token") {
+        if (typeof data.content === "string" && data.content) {
+          setAiReply((prev) => prev + data.content);
+        }
+        return;
+      }
+
+      if (data.type === "final") {
+        setAiReply(String(data.answer ?? ""));
+        const citationsData = Array.isArray(data.citations) ? data.citations : [];
+        setCitations(
+          citationsData.map((c: { source_label?: string; source_locator?: string }) => ({
+            source_label: String(c?.source_label ?? ""),
+            source_locator: String(c?.source_locator ?? ""),
+          })),
+        );
+        setStatus("");
+        setSending(false);
+        abortRef.current = null;
+        return;
+      }
+
+      if (data.type === "error") {
+        setStatus(ev.message || "问答失败。");
+        setSending(false);
+        abortRef.current = null;
+      }
+    };
+
+    abortRef.current = startAskQuestionStream(
+      { scene_id: "general", session_id: null, question: prompt },
+      onEvent,
+      () => {
+        setStatus("流式请求失败，请检查后端服务与网络。");
+        setSending(false);
+        abortRef.current = null;
+      },
+    );
+    setComposer("");
   }
 
   const currentNode = weakPoints[0]?.concept ?? "AI 架构基础";
@@ -67,52 +128,67 @@ export default function TutorPage() {
         <div className="flex-1 flex flex-col min-w-0">
           {/* Messages */}
           <div className="flex-1 overflow-y-auto space-y-6 pb-4">
-            {/* User message */}
-            <div className="flex justify-end">
-              <div className="bg-surface-container-high px-5 py-3 rounded-2xl rounded-tr-none max-w-[75%] border border-outline-variant/10">
-                <p className="text-sm leading-relaxed text-on-surface">{lastUserPrompt}</p>
-              </div>
-            </div>
-
-            {/* AI message */}
-            <div className="flex gap-3">
-              <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center flex-shrink-0 mt-1">
-                <span className="material-symbols-outlined text-primary text-base" style={{ fontVariationSettings: "'FILL' 1" }}>psychology</span>
-              </div>
-              <div className="space-y-3 max-w-[80%]">
-                <div className="glass-card p-5 rounded-2xl rounded-tl-none border border-primary/20 shadow-[0_0_30px_rgba(186,158,255,0.05)]">
-                  <p className="text-sm leading-relaxed text-on-surface whitespace-pre-line">{aiReply}</p>
-                  <div className="flex flex-wrap gap-2 mt-3">
-                    {citations.map((c) => (
-                      <span key={`${c.source_label}-${c.source_locator}`} className="text-[10px] bg-primary/10 text-primary px-2.5 py-1 rounded-full font-label border border-primary/20">
-                        {c.source_label}
-                      </span>
-                    ))}
+            {!lastUserPrompt && !aiReply && (
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center space-y-3">
+                  <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto">
+                    <span className="material-symbols-outlined text-primary text-3xl" style={{ fontVariationSettings: "'FILL' 1" }}>psychology</span>
                   </div>
-                </div>
-
-                {/* Quiz card */}
-                <div className="bg-surface-container-high/60 rounded-2xl p-4 border border-outline-variant/10">
-                  <div className="flex items-center gap-2 mb-3">
-                    <span className="text-tertiary font-bold">⚡</span>
-                    <span className="text-[10px] font-label font-bold uppercase tracking-widest text-tertiary">快速测验</span>
-                  </div>
-                  <p className="text-sm text-on-surface mb-3">在 RAG 架构中，LLM 生成回答之前会先发生什么？</p>
-                  <div className="space-y-2">
-                    <button className="w-full text-left px-4 py-2.5 rounded-xl bg-surface-container-highest text-sm text-on-surface-variant hover:bg-surface-container-highest/80 transition-colors">
-                      A) 随机编造一个事实
-                    </button>
-                    <button className="w-full text-left px-4 py-2.5 rounded-xl bg-tertiary/10 border border-tertiary/30 text-sm text-tertiary font-medium flex justify-between items-center">
-                      <span>B) 检索相关文档片段</span>
-                      <span className="text-tertiary">✓</span>
-                    </button>
-                    <button className="w-full text-left px-4 py-2.5 rounded-xl bg-surface-container-highest text-sm text-on-surface-variant hover:bg-surface-container-highest/80 transition-colors">
-                      C) 重新训练整个模型
-                    </button>
-                  </div>
+                  <p className="text-sm text-outline">向你的 AI 学伴提问，开始学习之旅</p>
                 </div>
               </div>
-            </div>
+            )}
+            {lastUserPrompt && (
+              <div className="flex justify-end">
+                <div className="bg-surface-container-high px-5 py-3 rounded-2xl rounded-tr-none max-w-[75%] border border-outline-variant/10">
+                  <p className="text-sm leading-relaxed text-on-surface">{lastUserPrompt}</p>
+                </div>
+              </div>
+            )}
+            {(aiReply || sending) && (
+              <div className="flex gap-3">
+                <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center flex-shrink-0 mt-1">
+                  <span className="material-symbols-outlined text-primary text-base" style={{ fontVariationSettings: "'FILL' 1" }}>psychology</span>
+                </div>
+                <div className="space-y-3 max-w-[80%]">
+                  {toolSteps.length > 0 && (
+                    <div className="bg-surface-container-high/40 rounded-xl p-3 space-y-1.5 border border-outline-variant/10">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="material-symbols-outlined text-secondary text-sm">account_tree</span>
+                        <span className="text-[10px] font-label font-bold uppercase tracking-widest text-outline">思维链</span>
+                      </div>
+                      {toolSteps.map((step) => (
+                        <div key={step.id} className="flex items-start gap-2">
+                          <span className={`material-symbols-outlined text-xs mt-0.5 ${step.type === "start" ? "text-secondary" : "text-tertiary"}`}>
+                            {step.type === "start" ? "play_arrow" : "check_circle"}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-[10px] font-bold text-on-surface">{step.name}</span>
+                            {step.detail && (
+                              <p className="text-[9px] text-outline truncate">{step.detail}</p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="glass-card p-5 rounded-2xl rounded-tl-none border border-primary/20 shadow-[0_0_30px_rgba(186,158,255,0.05)]">
+                    <p className="text-sm leading-relaxed text-on-surface whitespace-pre-line">
+                      {aiReply || <span className="text-outline">正在思考中...</span>}
+                    </p>
+                    {citations.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        {citations.map((c) => (
+                          <span key={`${c.source_label}-${c.source_locator}`} className="text-[10px] bg-primary/10 text-primary px-2.5 py-1 rounded-full font-label border border-primary/20">
+                            {c.source_label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Composer */}
@@ -129,16 +205,32 @@ export default function TutorPage() {
                 value={composer}
                 onChange={(e) => setComposer(e.target.value)}
                 placeholder="向你的 AI 学伴提问..."
-                className="flex-1 bg-surface-container-lowest rounded-xl px-4 py-3 text-sm text-on-surface placeholder:text-outline outline-none border border-outline-variant/30 focus:border-primary transition-colors"
+                disabled={sending}
+                className="flex-1 bg-surface-container-lowest rounded-xl px-4 py-3 text-sm text-on-surface placeholder:text-outline outline-none border border-outline-variant/30 focus:border-primary transition-colors disabled:opacity-60"
               />
               <button
                 type="submit"
-                disabled={sending}
+                disabled={sending || !composer.trim()}
                 className="w-10 h-10 rounded-xl bg-primary text-on-primary flex items-center justify-center hover:scale-105 active:scale-95 transition-all disabled:opacity-60"
               >
                 <span className="material-symbols-outlined text-base" style={{ fontVariationSettings: "'FILL' 1" }}>send</span>
               </button>
+              {sending && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    abortRef.current?.();
+                    abortRef.current = null;
+                    setSending(false);
+                    setStatus("已停止生成。");
+                  }}
+                  className="w-10 h-10 rounded-xl bg-surface-container-high text-outline flex items-center justify-center hover:text-primary hover:bg-primary/10 transition-all border border-outline-variant/10"
+                >
+                  <span className="material-symbols-outlined text-base">stop</span>
+                </button>
+              )}
             </div>
+            {status && <p className="text-[10px] text-outline">{status}</p>}
           </form>
         </div>
 

@@ -28,9 +28,8 @@ LAYER1_BASE = """你是 AI 伴学平台的学习助手「Nova」。
 
 ## 基础行为规范
 - 知识性问题必须先检索知识库，基于检索结果回答，不凭空作答
-- 引用知识库内容时标注来源：[来源：文件名 第X段]
 - 知识库没有相关内容时明确告知，不编造答案
-- 回答简洁，重点突出，不超过 300 字
+- 回答简洁，重点突出
 - 对话结尾可加一句引导性问题，保持连续感
 - 闲聊和打招呼直接回复，不调用任何工具"""
 
@@ -127,7 +126,7 @@ def build_system_prompt(scene: SceneTable, persona: str) -> str:
     Args:
         scene:    从数据库读取的 SceneTable 对象
                   scene.system_prompt  → Layer3 场景专业知识
-                  scene.tools_enabled  → Layer4 工具可见性
+                  scene.enabled_tools  → Layer4 工具可见性
                   scene.eval_rubric    → Layer4 评分维度注入
         persona:  用户选择的 AI 搭子人设 → Layer2
 
@@ -143,7 +142,7 @@ def build_system_prompt(scene: SceneTable, persona: str) -> str:
 
     # Layer4: 根据场景配置动态生成，eval_rubric 注入
     layer4 = _build_layer4(
-        tools_enabled=scene.tools_enabled or [],
+        tools_enabled=scene.enabled_tools or [],
         eval_rubric=scene.eval_rubric,
     )
 

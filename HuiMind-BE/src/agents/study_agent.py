@@ -147,7 +147,7 @@ def build_study_agent(user_id: str, scene: SceneTable | None, persona: str = "�
     Returns:
         编译后的 LangGraph 图实例。
     """
-    tools_enabled = (scene.tools_enabled if scene else []) or ["qa", "quiz", "memory"]
+    tools_enabled = (scene.enabled_tools if scene else []) or ["qa", "quiz", "memory"]
     tools = build_tools_for_scene(user_id, scene.scene_id if scene else "general", tools_enabled)
 
     llm = LLMService.get(

@@ -1,26 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 
-import { startAskQuestionStream, type AskStreamEnvelope } from "@/lib/api";
 import { useMvpData } from "@/hooks/use-mvp-data";
 import { WorkspaceFrame } from "@/components/workspace-frame";
 
 export default function DashboardPage() {
   const { loading, error, dashboard, scenes, documents, weakPoints, reviewTasks, buddyProfile, reload } = useMvpData("general");
-  const [question, setQuestion] = useState("请根据当前资料总结 Redis 的三个关键考点。");
-  const [qaAnswer, setQaAnswer] = useState("");
-  const [qaCitations, setQaCitations] = useState<Array<{ source_label: string; source_locator: string }>>([]);
-  const [status, setStatus] = useState("");
-  const [qaStreaming, setQaStreaming] = useState(false);
-  const [qaSteps, setQaSteps] = useState<Array<{ id: string; title: string; detail?: string }>>([]);
-  const abortRef = useRef<null | (() => void)>(null);
-
-  useEffect(() => {
-    return () => {
-      abortRef.current?.();
-    };
-  }, []);
 
   const stats = useMemo(
     () => [
@@ -30,75 +16,6 @@ export default function DashboardPage() {
     ],
     [documents.length, reviewTasks.length, weakPoints.length],
   );
-
-  async function handleAsk(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    abortRef.current?.();
-    setQaAnswer("");
-    setQaCitations([]);
-    setQaSteps([]);
-    setStatus("请求已发送，等待模型响应...");
-    setQaStreaming(true);
-
-    const onEvent = (ev: AskStreamEnvelope) => {
-      const data = (ev as AskStreamEnvelope).data as any;
-      if (!data || typeof data.type !== "string") return;
-
-      if (data.type === "status") {
-        if (typeof data.content === "string") setStatus(data.content);
-        return;
-      }
-
-      if (data.type === "tool_start") {
-        setQaSteps((prev) => {
-          const next = prev.concat([{ id: `tool_start_${data.step ?? prev.length}`, title: `开始工具：${data.tool_name ?? "unknown"}`, detail: JSON.stringify(data.input ?? "") }]);
-          return next.slice(-60);
-        });
-        return;
-      }
-
-      if (data.type === "tool_end") {
-        setQaSteps((prev) => {
-          const next = prev.concat([{ id: `tool_end_${data.step ?? prev.length}`, title: `结束工具：${data.tool_name ?? "unknown"}`, detail: String(data.output ?? "") }]);
-          return next.slice(-60);
-        });
-        return;
-      }
-
-      if (data.type === "token") {
-        if (typeof data.content === "string" && data.content) {
-          setQaAnswer((prev) => prev + data.content);
-        }
-        return;
-      }
-
-      if (data.type === "final") {
-        setQaAnswer(String(data.answer ?? ""));
-        const citations = Array.isArray(data.citations) ? data.citations : [];
-        setQaCitations(citations.map((c: any) => ({ source_label: String(c?.source_label ?? ""), source_locator: String(c?.source_locator ?? "") })));
-        setStatus("问答完成。");
-        setQaStreaming(false);
-        abortRef.current = null;
-        return;
-      }
-
-      if (data.type === "error") {
-        setStatus(ev.message || "问答失败。");
-        setQaStreaming(false);
-        abortRef.current = null;
-      }
-    };
-
-    abortRef.current = startAskQuestionStream(
-      { scene_id: "general", session_id: null, question },
-      onEvent,
-      () => {
-        setStatus("流式请求失败，请检查后端服务与网络。");
-        setQaStreaming(false);
-        abortRef.current = null;
-      },
-    );
-  }
 
   return (
     <WorkspaceFrame badge="学习中枢" title="学习中枢" subtitle="AI 学伴、技能图谱与学习进度一览，开启高效学习之旅。">
@@ -226,69 +143,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="glass-card rounded-3xl p-6 border border-outline-variant/10 shadow-xl">
-            <div className="flex items-center gap-2 mb-4">
-              <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }}>psychology</span>
-              <h3 className="font-headline font-bold text-on-surface">向知识库提问</h3>
-            </div>
-            <form className="space-y-3" onSubmit={handleAsk}>
-              <textarea
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                rows={4}
-                disabled={qaStreaming}
-                className="w-full bg-surface-container-lowest rounded-xl px-4 py-3 text-sm text-on-surface placeholder:text-outline outline-none border-b-2 border-transparent focus:border-primary transition-colors resize-none"
-                placeholder="输入你的问题..."
-              />
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="submit"
-                  disabled={qaStreaming}
-                  className="w-full bg-primary text-on-primary font-bold py-2.5 rounded-xl text-sm hover:scale-[1.01] active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {qaStreaming ? "生成中..." : "发送问题"}
-                </button>
-                <button
-                  type="button"
-                  disabled={!qaStreaming}
-                  onClick={() => {
-                    abortRef.current?.();
-                    abortRef.current = null;
-                    setQaStreaming(false);
-                    setStatus("已停止生成。");
-                  }}
-                  className="w-full bg-surface-container-high text-outline font-bold py-2.5 rounded-xl text-sm hover:text-primary hover:bg-primary/10 transition-all border border-outline-variant/10 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  停止
-                </button>
-              </div>
-            </form>
-            {qaAnswer && (
-              <div className="mt-4 bg-surface-container-high/40 rounded-xl p-4 space-y-2">
-                <p className="text-sm text-on-surface whitespace-pre-line leading-relaxed">{qaAnswer}</p>
-                {qaCitations.length > 0 && (
-                  <div className="flex flex-wrap gap-2 pt-2 border-t border-outline-variant/20">
-                    {qaCitations.map((c, i) => (
-                      <span key={i} className="text-[10px] bg-primary/10 text-primary px-2.5 py-1 rounded-full font-label border border-primary/20">
-                        {c.source_label}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            {qaSteps.length > 0 && (
-              <div className="mt-3 bg-surface-container-high/20 rounded-xl p-3 max-h-32 overflow-y-auto">
-                {qaSteps.map((step) => (
-                  <div key={step.id} className="text-[10px] text-outline mb-1">
-                    <span className="text-secondary">{step.title}</span>
-                    {step.detail && <span className="ml-2 opacity-60">{step.detail.slice(0, 80)}...</span>}
-                  </div>
-                ))}
-              </div>
-            )}
-            {status && <p className="mt-2 text-[10px] text-outline">{status}</p>}
-          </div>
+
         </section>
 
         <section className="col-span-12">

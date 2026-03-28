@@ -12,7 +12,7 @@
 import asyncio
 import contextvars
 import json
-import uuid
+import time
 from collections.abc import AsyncIterator
 from datetime import timedelta
 
@@ -62,11 +62,8 @@ class AgentService(DomainSupportService):
             AskData 包含 session_id、answer、citations 等信息。
         """
         user = await self.get_default_user()
-        session_id = payload.session_id or str(uuid.uuid4())
-        scene = await SceneManager().query_by_id(payload.scene_id) if payload.scene_id else None
-
-        if not scene:
-            scene = await SceneManager().query_one(conds=[SceneManager.orm_table.scene_id == "general"])
+        session_id = payload.session_id or int(time.time() * 1000)
+        scene = await SceneManager().query_one(conds=[SceneManager.orm_table.scene_id == "general"])
 
         enabled_tools = (scene.enabled_tools if scene else []) or []
         persona = await self._resolve_persona(user_id=user.id)
@@ -128,11 +125,8 @@ class AgentService(DomainSupportService):
             事件字典，包含 type、content 等字段。
         """
         user = await self.get_default_user()
-        session_id = payload.session_id or str(uuid.uuid4())
-        scene = await SceneManager().query_by_id(payload.scene_id) if payload.scene_id else None
-
-        if not scene:
-            scene = await SceneManager().query_one(conds=[SceneManager.orm_table.scene_id == "general"])
+        session_id = payload.session_id or int(time.time() * 1000)
+        scene = await SceneManager().query_one(conds=[SceneManager.orm_table.scene_id == "general"])
 
         enabled_tools = (scene.enabled_tools if scene else []) or []
         persona = await self._resolve_persona(user_id=user.id)
