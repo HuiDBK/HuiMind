@@ -1,11 +1,10 @@
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.embeddings import DashScopeEmbeddings
 
-from src.settings import (
+from src.settings.test_llm_setting import (
     model_name,
     openai_api_key,
     openai_api_base,
-    embedding_api_base,
     dashscope_api_key,
     embedding_model_name,
 )
@@ -35,8 +34,17 @@ def test_embedding():
     print("Embedding length:", len(vector))
     print("Embedding sample:", vector[:5])
 
+    # embeddings = OpenAIEmbeddings(
+    #     openai_api_key=openai_api_key,
+    #     openai_api_base=openai_api_base,
+    #     model="text-embedding-3"
+    # )
+    # vector = embeddings.embed_query("你好")
+    # print("Embedding length:", len(vector))
+    # print("Embedding sample:", vector[:5])
+
 
 if __name__ == "__main__":
     test_llm_chat()
-    # test_embedding()
+    test_embedding()
 
