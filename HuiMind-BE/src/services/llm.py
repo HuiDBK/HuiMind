@@ -36,7 +36,7 @@ class LLMConfig:
 # 只给“OpenAI兼容”用
 _OPENAI_COMPATIBLE = {
     LLMProvider.OPENAI: {
-        "base_url": settings.openai_base_url,
+        "base_url": settings.openai_api_base,
         "api_key": settings.openai_api_key,
     },
     LLMProvider.DEEPSEEK: {
@@ -78,8 +78,8 @@ class LLMService:
 
             llm = ChatOpenAI(
                 openai_api_key=api_key or conf["api_key"],
-                base_url=base_url or conf["base_url"],
-                model_name=config.model_name,
+                openai_api_base=base_url or conf["base_url"],
+                model=config.model_name,
                 temperature=config.temperature,
                 streaming=config.streaming,
                 max_tokens=config.max_tokens,

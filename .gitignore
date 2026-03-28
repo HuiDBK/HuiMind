@@ -11,6 +11,7 @@ res
 # C extensions
 *.so
 chroma_db
+test_llm_setting.py
 
 # Python build artifacts
 HuiMind-BE/build/
