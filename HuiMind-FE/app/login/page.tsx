@@ -111,9 +111,19 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-primary text-on-primary font-headline font-bold py-3.5 rounded-xl shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed mt-2"
+              className="w-full bg-gradient-to-r from-primary to-secondary text-on-primary font-headline font-bold py-3.5 rounded-xl shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed mt-2 flex items-center justify-center gap-2"
             >
+              <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>workspace_premium</span>
               {loading ? "登录中..." : "进入工作台"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => router.replace("/dashboard")}
+              className="w-full bg-surface-container-high text-on-surface font-headline font-bold py-3.5 rounded-xl border border-outline-variant/30 hover:bg-surface-container-highest hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2"
+            >
+              <span className="material-symbols-outlined">skip_next</span>
+              跳过登录（调试模式）
             </button>
           </form>
 

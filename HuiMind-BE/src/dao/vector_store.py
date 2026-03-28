@@ -1,7 +1,7 @@
 import os
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.embeddings.fake import FakeEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from src import settings
 
 
@@ -41,12 +41,16 @@ class VectorStoreManager:
             collection = self.get_collection(scene_id)
             collection.add_documents(documents)
             return True
-        except Exception:
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"Failed to add documents to vector store: {e}")
             return False
 
     def search(self, scene_id: str, query: str, k: int = 4, filter: dict = None):
         try:
             collection = self.get_collection(scene_id)
             return collection.similarity_search(query, k=k, filter=filter)
-        except Exception:
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"Failed to search documents: {e}")
             return []

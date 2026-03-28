@@ -2,7 +2,7 @@
 
 @theme {
   --color-surface-container-lowest: #0b1428;
-  --color-outline: #8c96bd;
+  --color-outline: #a8b2d1;
   --color-primary-container: #2c2456;
   --color-error-container: #4a2230;
   --color-surface-container-high: #15203b;
@@ -24,13 +24,13 @@
   --color-secondary-dim: #6484f1;
   --color-tertiary: #52d2a3;
   --color-surface-variant: #111b34;
-  --color-on-surface: #dee5ff;
+  --color-on-surface: #f0f4ff;
   --color-primary: #ba9eff;
   --color-surface-container-low: #0f1830;
   --color-error-dim: #ff9bb1;
   --color-surface-tint: #ba9eff;
-  --color-on-background: #dee5ff;
-  --color-on-surface-variant: #93a0c6;
+  --color-on-background: #f0f4ff;
+  --color-on-surface-variant: #b8c0e0;
   --color-primary-dim: #9d7dff;
 
   --font-headline: "Space Grotesk", sans-serif;

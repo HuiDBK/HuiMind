@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 T = TypeVar("T")
 ItemT = TypeVar("ItemT")
 
-SceneID = Literal["general", "career"]
+SceneID = Literal["general", "career", "kaoyan", "gongkao"]
 DocType = Literal["resume", "jd", "material", "note"]
 BuddyPersona = Literal["gentle", "strict", "energetic", "calm"]
 ReviewResult = Literal["mastered", "review_again"]

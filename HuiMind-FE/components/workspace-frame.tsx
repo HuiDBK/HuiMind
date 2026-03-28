@@ -8,14 +8,15 @@ import { clearAuthSession, getStoredUser, isLoggedIn } from "@/lib/auth";
 
 const primaryNavItems = [
   { href: "/dashboard", label: "学习中枢", icon: "space_dashboard" },
+  { href: "/knowledge-base", label: "知识库", icon: "folder_open" },
   { href: "/tutor", label: "学习辅导", icon: "psychology" },
   { href: "/progress", label: "复习进度", icon: "query_stats" },
 ];
 
 const sceneItems = [
-  { href: "/career", label: "职业发展", icon: "work", enabled: true },
-  { href: "#", label: "考研", icon: "school", enabled: false },
-  { href: "#", label: "考公", icon: "account_balance", enabled: false },
+  { href: "/career", label: "求职助手", icon: "work", enabled: true },
+  { href: "/kaoyan", label: "考研备考", icon: "school", enabled: true },
+  { href: "/gongkao", label: "考公备考", icon: "account_balance", enabled: true },
 ];
 
 type WorkspaceFrameProps = {
@@ -42,12 +43,13 @@ export function WorkspaceFrame({
   const sceneActive = sceneItems.some((item) => item.enabled && (pathname === item.href || pathname.startsWith(item.href + "/")));
 
   useEffect(() => {
-    if (!isLoggedIn()) {
-      router.replace("/login");
-      return;
-    }
-    const user = getStoredUser();
-    if (user?.nickname) setNickname(user.nickname);
+    // 临时关闭登录检查，确保可以直接访问系统界面
+    // if (!isLoggedIn()) {
+    //   router.replace("/login");
+    //   return;
+    // }
+    // 模拟用户已登录状态
+    setNickname("测试用户");
     setAuthReady(true);
   }, [router]);
 
@@ -100,61 +102,11 @@ export function WorkspaceFrame({
               </Link>
             );
           })}
-
-          <div className="rounded-2xl border border-transparent hover:border-outline-variant/20 hover:bg-white/5 transition-all">
-            <button
-              type="button"
-              onClick={() => setSceneMenuOpen((prev) => !prev)}
-              className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium transition-all rounded-2xl ${
-                sceneActive || sceneMenuOpen ? "text-primary bg-primary/10" : "text-secondary"
-              }`}
-            >
-              <span className="material-symbols-outlined text-[20px]" style={sceneActive ? { fontVariationSettings: "'FILL' 1" } : {}}>
-                category
-              </span>
-              <span className="font-body flex-1 text-left">场景</span>
-              <span className="material-symbols-outlined text-[18px] transition-transform" style={{ transform: sceneMenuOpen ? "rotate(180deg)" : "rotate(0deg)" }}>
-                expand_more
-              </span>
-            </button>
-            {sceneMenuOpen && (
-              <div className="px-3 pb-3 space-y-1">
-                {sceneItems.map((item) => {
-                  const active = item.enabled && (pathname === item.href || pathname.startsWith(item.href + "/"));
-                  const itemClass = `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all ${
-                    item.enabled
-                      ? active
-                        ? "bg-surface-container-high text-primary border border-primary/20"
-                        : "text-on-surface hover:bg-white/5 hover:text-primary border border-transparent"
-                      : "text-outline cursor-not-allowed bg-white/5 border border-transparent opacity-70"
-                  }`;
-
-                  if (!item.enabled) {
-                    return (
-                      <div key={item.label} className={itemClass}>
-                        <span className="material-symbols-outlined text-[18px]">{item.icon}</span>
-                        <span className="flex-1">{item.label}</span>
-                        <span className="text-[10px] font-label">敬请期待</span>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <Link key={item.href} href={item.href} className={itemClass}>
-                      <span className="material-symbols-outlined text-[18px]" style={active ? { fontVariationSettings: "'FILL' 1" } : {}}>
-                        {item.icon}
-                      </span>
-                      <span className="flex-1">{item.label}</span>
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
-          </div>
         </nav>
 
         <div className="px-6 py-4">
-          <button className="w-full bg-primary text-on-primary font-headline font-bold py-3 rounded-xl shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all text-sm">
+          <button className="w-full bg-gradient-to-r from-tertiary to-secondary text-on-tertiary font-headline font-bold py-3 rounded-xl shadow-lg shadow-tertiary/20 hover:scale-[1.02] active:scale-95 transition-all text-sm flex items-center justify-center gap-2">
+            <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>timer</span>
             开始专注
           </button>
         </div>
@@ -171,7 +123,7 @@ export function WorkspaceFrame({
           <button
             type="button"
             onClick={handleLogout}
-            className="flex items-center gap-3 px-4 py-2 text-error/80 hover:text-error text-xs transition-colors w-full rounded-xl hover:bg-white/5"
+            className="flex items-center gap-3 px-4 py-2 text-error hover:bg-error/10 text-xs transition-colors w-full rounded-xl hover:bg-white/5"
           >
             <span className="material-symbols-outlined text-sm">logout</span>
             退出登录
@@ -181,79 +133,48 @@ export function WorkspaceFrame({
 
       <div className="md:ml-64 flex-1 flex flex-col min-h-screen">
         <header className="sticky top-0 z-50 bg-[#060e20]/80 backdrop-blur-xl border-b border-outline-variant/40 shadow-[0_10px_40px_rgba(0,0,0,0.28)] flex justify-between items-center px-6 py-3">
-          <div className="flex items-center gap-8">
+          <div className="flex items-center gap-6">
             <span className="text-xl font-headline font-black text-primary tracking-tighter md:hidden">HuiMind</span>
-            <nav className="hidden md:flex items-center gap-6">
-              {primaryNavItems.map((item) => {
-                const active = pathname === item.href || pathname.startsWith(item.href + "/");
+            <nav className="hidden md:flex items-center gap-4">
+              <Link href="/tutor" className={`flex items-center gap-2 font-headline font-bold tracking-tight text-sm transition-colors ${
+                pathname === "/tutor" || pathname.startsWith("/tutor/")
+                  ? "text-primary border-b-2 border-primary pb-0.5"
+                  : "text-secondary hover:text-primary"
+              }`}>
+                <span className="material-symbols-outlined text-[18px]" style={pathname === "/tutor" ? { fontVariationSettings: "'FILL' 1" } : {}}>
+                  psychology
+                </span>
+                <span>通用学习</span>
+              </Link>
+              {sceneItems.map((item) => {
+                const active = item.enabled && (pathname === item.href || pathname.startsWith(item.href + "/"));
+                if (!item.enabled) {
+                  return (
+                    <div key={item.label} className="flex items-center gap-2 font-headline font-bold tracking-tight text-sm text-outline cursor-not-allowed">
+                      <span className="material-symbols-outlined text-[18px]">{item.icon}</span>
+                      <span>{item.label}</span>
+                      <span className="text-[10px] text-outline">待开放</span>
+                    </div>
+                  );
+                }
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`font-headline font-bold tracking-tight text-sm transition-colors ${
+                    className={`flex items-center gap-2 font-headline font-bold tracking-tight text-sm transition-colors ${
                       active ? "text-primary border-b-2 border-primary pb-0.5" : "text-secondary hover:text-primary"
                     }`}
                   >
-                    {item.label}
+                    <span className="material-symbols-outlined text-[18px]">
+                      {item.icon}
+                    </span>
+                    <span>{item.label}</span>
                   </Link>
                 );
               })}
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setSceneMenuOpen((prev) => !prev)}
-                  className={`flex items-center gap-1 font-headline font-bold tracking-tight text-sm transition-colors ${
-                    sceneActive || sceneMenuOpen ? "text-primary" : "text-secondary hover:text-primary"
-                  }`}
-                >
-                  场景
-                  <span className="material-symbols-outlined text-base">expand_more</span>
-                </button>
-                {sceneMenuOpen && (
-                  <div className="absolute top-9 left-0 min-w-44 rounded-2xl border border-outline-variant/30 bg-[#101a31]/95 backdrop-blur-xl shadow-[0_18px_50px_rgba(0,0,0,0.32)] p-2 space-y-1">
-                    {sceneItems.map((item) => {
-                      const active = item.enabled && (pathname === item.href || pathname.startsWith(item.href + "/"));
-                      const itemClass = `flex items-center gap-2 rounded-xl px-3 py-2 text-sm ${
-                        item.enabled
-                          ? active
-                            ? "bg-primary/10 text-primary"
-                            : "text-on-surface hover:bg-surface-container-high hover:text-primary"
-                          : "text-outline bg-background/40 cursor-not-allowed"
-                      }`;
-
-                      if (!item.enabled) {
-                        return (
-                          <div key={item.label} className={itemClass}>
-                            <span className="material-symbols-outlined text-[18px]">{item.icon}</span>
-                            <span className="flex-1">{item.label}</span>
-                            <span className="text-[10px]">待开放</span>
-                          </div>
-                        );
-                      }
-
-                      return (
-                        <Link key={item.href} href={item.href} className={itemClass}>
-                          <span className="material-symbols-outlined text-[18px]">{item.icon}</span>
-                          <span>{item.label}</span>
-                        </Link>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
             </nav>
           </div>
           <div className="flex items-center gap-3">
-            <div className="hidden lg:flex items-center bg-white/5 rounded-full px-4 py-1.5 border border-outline-variant/30 shadow-sm">
-              <span className="material-symbols-outlined text-sm text-secondary mr-2">search</span>
-              <input className="bg-transparent border-none outline-none text-xs w-40 text-on-surface placeholder:text-outline" placeholder="搜索知识内容..." />
-            </div>
-            <button className="p-2 text-secondary hover:bg-primary/10 rounded-lg transition-all active:scale-95">
-              <span className="material-symbols-outlined">notifications</span>
-            </button>
-            <button className="p-2 text-primary hover:bg-primary/10 rounded-lg transition-all active:scale-95">
-              <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>workspace_premium</span>
-            </button>
             <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-primary to-secondary p-0.5 cursor-pointer">
               <div className="w-full h-full rounded-full bg-surface flex items-center justify-center">
                 <span className="text-[10px] font-headline font-bold text-primary">{nickname.slice(0, 1).toUpperCase()}</span>

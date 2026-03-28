@@ -1,17 +1,27 @@
-"""Agent services."""
+"""Agent 服务层实现。
+
+该模块负责协调 Agent 的核心业务逻辑，包括：
+- 问答处理（同步与流式）
+- 知识库检索
+- 练习题生成
+- 薄弱点追踪
+- 复习调度
+- 评分评估
+"""
 
 import asyncio
 import contextvars
 import json
+import uuid
 from collections.abc import AsyncIterator
 from datetime import timedelta
 
-from langchain.agents import create_agent
-from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
+from loguru import logger
 
-from src import settings
-from src.agents.agent_prompt import build_system_prompt
+from src.agents.agent_prompt import build_general_prompt, build_system_prompt
 from src.agents.agent_tools import build_agent_tools
+from src.agents.study_agent import AgentState, build_study_agent, run_agent_stream
 from src.dao.orm.manager.buddy import BuddyProfileManager
 from src.dao.orm.manager.document import DocumentManager
 from src.dao.orm.manager.rag import QaRecordManager
@@ -22,254 +32,167 @@ from src.dao.redis.session import append_qa_message, get_qa_history
 from src.dao.vector_store import VectorStoreManager
 from src.data_schemas.api_schemas.rag import AskData, AskRequest, CitationItem
 from src.services.base import DomainSupportService, now_ts
-
+from src.services.llm import LLMConfig, LLMProvider, LLMService
 
 _RUN_CONTEXT: contextvars.ContextVar[dict | None] = contextvars.ContextVar("agent_run_context", default=None)
 
 
 class AgentService(DomainSupportService):
+    """Agent 服务类，负责处理用户问答、知识库检索、练习生成等核心业务。
+
+    该服务协调 LLM、向量数据库、关系数据库等组件，提供完整的 AI 伴学能力。
+    """
+
     def __init__(self):
+        """初始化 AgentService。"""
         super().__init__()
-        self.llm = ChatOpenAI(
-            openai_api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-            model_name=settings.model_name,
-            temperature=0.3,
-            streaming=True,
-        )
         self.vector_store = VectorStoreManager()
+        self.llm = LLMService.get(
+            provider=LLMProvider.OPENAI,
+            config=LLMConfig(temperature=0.3, streaming=True),
+        )
 
     async def ask(self, payload: AskRequest) -> AskData:
+        """处理用户问答请求（非流式）。
+
+        Args:
+            payload: 问答请求参数，包含 scene_id、session_id、question。
+
+        Returns:
+            AskData 包含 session_id、answer、citations 等信息。
+        """
         user = await self.get_default_user()
-        session_id = payload.session_id or int(now_ts().timestamp())
-        scene = await SceneManager().query_one(conds=[SceneManager.orm_table.scene_id == payload.scene_id])
+        session_id = payload.session_id or str(uuid.uuid4())
+        scene = await SceneManager().query_by_id(payload.scene_id) if payload.scene_id else None
+
+        if not scene:
+            scene = await SceneManager().query_one(conds=[SceneManager.orm_table.scene_id == "general"])
+
         enabled_tools = (scene.enabled_tools if scene else []) or []
         persona = await self._resolve_persona(user_id=user.id)
 
-        system_prompt = build_system_prompt(scene=scene, persona=persona)
-        tools = build_agent_tools(
-            service=self,
-            scene_id=payload.scene_id,
-            enabled_tools=enabled_tools,
-            eval_rubric=(scene.eval_rubric if scene else {}) or {},
-        )
-        agent = create_agent(self.llm, tools, system_prompt=system_prompt)
+        graph = build_study_agent(str(user.id), scene, persona)
+        initial_state: AgentState = {
+            "messages": [HumanMessage(content=payload.question)],
+            "user_id": user.id,
+            "scene": scene,
+            "persona": persona,
+            "tools_used": [],
+            "iteration_count": 0,
+        }
 
-        history = await self._load_history(user_id=user.id, scene_id=payload.scene_id, session_id=session_id)
-        messages = self._build_messages(history=history, question=payload.question)
-
-        token = _RUN_CONTEXT.set({"citations": {}})
         try:
-            out = await agent.ainvoke({"messages": messages})
-        except Exception:
-            _RUN_CONTEXT.reset(token)
-            answer_text = "Agent 调用模型失败：请检查 OPENAI_API_KEY、OPENAI_API_BASE 与模型名称是否正确。"
-            citations: list[CitationItem] = []
-            return AskData(session_id=session_id, answer=answer_text, citations=citations, insufficient_context=True)
+            result = await graph.ainvoke(initial_state)
+            messages = result.get("messages", [])
+            answer_text = ""
+            if messages:
+                last_msg = messages[-1]
+                answer_text = getattr(last_msg, "content", "")
 
-        ctx = _RUN_CONTEXT.get() or {}
-        _RUN_CONTEXT.reset(token)
+            if not answer_text:
+                answer_text = "抱歉，我暂时无法回答这个问题。"
 
-        answer_text = self._extract_final_answer(out) or "我没有得到稳定的回答结果。"
-        citations = list((ctx.get("citations") or {}).values())
+            citations = await self._extract_citations(scene.scene_id if scene else "general", payload.question)
 
-        await self._persist_qa(
-            user_id=user.id,
-            scene_id=payload.scene_id,
-            session_id=session_id,
-            question=payload.question,
-            answer=answer_text,
-            citations=citations,
-        )
+            await self._persist_qa(
+                user_id=user.id,
+                scene_id=scene.scene_id if scene else "general",
+                session_id=session_id,
+                question=payload.question,
+                answer=answer_text,
+                citations=citations,
+            )
 
-        return AskData(
-            session_id=session_id,
-            answer=answer_text,
-            citations=citations,
-            insufficient_context=False if citations else True,
-        )
+            return AskData(
+                session_id=session_id,
+                answer=answer_text,
+                citations=citations,
+                insufficient_context=len(citations) == 0,
+            )
+        except Exception as e:
+            logger.error(f"[AgentService] ask error: {e}")
+            return AskData(
+                session_id=session_id,
+                answer=f"处理请求时发生错误：{str(e)}",
+                citations=[],
+                insufficient_context=True,
+            )
 
     async def ask_stream(self, payload: AskRequest) -> AsyncIterator[dict]:
+        """处理用户问答请求（流式）。
+
+        Args:
+            payload: 问答请求参数。
+
+        Yields:
+            事件字典，包含 type、content 等字段。
+        """
         user = await self.get_default_user()
-        session_id = payload.session_id or int(now_ts().timestamp())
-        scene = await SceneManager().query_one(conds=[SceneManager.orm_table.scene_id == payload.scene_id])
+        session_id = payload.session_id or str(uuid.uuid4())
+        scene = await SceneManager().query_by_id(payload.scene_id) if payload.scene_id else None
+
+        if not scene:
+            scene = await SceneManager().query_one(conds=[SceneManager.orm_table.scene_id == "general"])
+
         enabled_tools = (scene.enabled_tools if scene else []) or []
         persona = await self._resolve_persona(user_id=user.id)
 
-        system_prompt = build_system_prompt(scene=scene, persona=persona)
-        tools = build_agent_tools(
-            service=self,
-            scene_id=payload.scene_id,
-            enabled_tools=enabled_tools,
-            eval_rubric=(scene.eval_rubric if scene else {}) or {},
-        )
-        agent = create_agent(self.llm, tools, system_prompt=system_prompt)
+        graph = build_study_agent(str(user.id), scene, persona)
 
-        history = await self._load_history(user_id=user.id, scene_id=payload.scene_id, session_id=session_id)
-        messages = self._build_messages(history=history, question=payload.question)
-
-        token = _RUN_CONTEXT.set({"citations": {}})
         answer_text = ""
-        tool_step = 0
-
-        yield {
-            "code": 0,
-            "message": "ok",
-            "data": {"type": "status", "session_id": session_id, "content": "开始处理请求，准备调用工具与生成回答。"},
-        }
+        citations = []
 
         try:
-            async for ev in agent.astream_events({"messages": messages}, version="v2"):
-                evt = ev.get("event")
-                name = ev.get("name")
-                data = ev.get("data") or {}
+            async for event in run_agent_stream(graph, user.id, scene, payload.question, persona):
+                event_type = event.get("type")
 
-                if evt == "on_tool_start":
-                    tool_step += 1
+                if event_type == "token":
+                    answer_text += event.get("content", "")
+                    yield {"code": 0, "message": "ok", "data": event}
+                elif event_type == "tool_start":
+                    yield {"code": 0, "message": "ok", "data": event}
+                elif event_type == "tool_end":
+                    yield {"code": 0, "message": "ok", "data": event}
+                elif event_type == "status":
+                    yield {"code": 0, "message": "ok", "data": event}
+                elif event_type == "final":
+                    answer_text = event.get("content", answer_text)
+                    citations = await self._extract_citations(scene.scene_id if scene else "general", payload.question)
                     yield {
                         "code": 0,
                         "message": "ok",
                         "data": {
-                            "type": "tool_start",
-                            "step": tool_step,
-                            "tool_name": name,
-                            "input": data.get("input"),
+                            "type": "final",
+                            "session_id": session_id,
+                            "answer": answer_text,
+                            "citations": [c.model_dump() for c in citations],
+                            "insufficient_context": len(citations) == 0,
                         },
                     }
-                    continue
-
-                if evt == "on_tool_end":
-                    tool_step += 1
-                    output = data.get("output")
-                    if not isinstance(output, str):
-                        output = getattr(output, "content", None) or str(output)
-                    if isinstance(output, str) and len(output) > 2000:
-                        output = output[:2000]
-                    yield {
-                        "code": 0,
-                        "message": "ok",
-                        "data": {
-                            "type": "tool_end",
-                            "step": tool_step,
-                            "tool_name": name,
-                            "output": output,
-                        },
-                    }
-                    continue
-
-                if evt == "on_chat_model_stream":
-                    chunk = data.get("chunk")
-                    piece = getattr(chunk, "content", None)
-                    if piece:
-                        answer_text += piece
-                        yield {"code": 0, "message": "ok", "data": {"type": "token", "content": piece}}
-                    continue
-
-                if evt == "on_chain_end" and name == "LangGraph":
-                    final = self._extract_final_answer(data.get("output"))
-                    if final:
-                        answer_text = final
-        except Exception:
-            _RUN_CONTEXT.reset(token)
-            yield {"code": 1, "message": "Agent 调用模型失败", "data": {"type": "error", "session_id": session_id}}
+        except Exception as e:
+            logger.error(f"[AgentService] ask_stream error: {e}")
+            yield {"code": 1, "message": f"处理请求时发生错误：{str(e)}", "data": {"type": "error"}}
             return
-
-        ctx = _RUN_CONTEXT.get() or {}
-        _RUN_CONTEXT.reset(token)
-        citations = list((ctx.get("citations") or {}).values())
 
         await self._persist_qa(
             user_id=user.id,
-            scene_id=payload.scene_id,
+            scene_id=scene.scene_id if scene else "general",
             session_id=session_id,
             question=payload.question,
             answer=answer_text,
             citations=citations,
-        )
-
-        yield {
-            "code": 0,
-            "message": "ok",
-            "data": {
-                "type": "final",
-                "session_id": session_id,
-                "answer": answer_text,
-                "citations": [c.model_dump() for c in citations],
-                "insufficient_context": False if citations else True,
-            },
-        }
-
-    async def _resolve_persona(self, *, user_id: int) -> str:
-        persona = "陪伴型"
-        try:
-            buddy = await BuddyProfileManager().query_one(
-                conds=[BuddyProfileTable.user_id == user_id, BuddyProfileTable.deleted_at.is_(None)],
-                orders=[BuddyProfileTable.id.asc()],
-            )
-            if buddy and buddy.persona:
-                persona = buddy.persona
-        except Exception:
-            pass
-        return persona
-
-    async def _load_history(self, *, user_id: int, scene_id: str, session_id: int) -> list[dict]:
-        try:
-            return await get_qa_history(user_id=user_id, scene_id=scene_id, session_id=session_id)
-        except Exception:
-            return []
-
-    @staticmethod
-    def _build_messages(*, history: list[dict], question: str) -> list[dict]:
-        msgs = []
-        for item in history[-10:]:
-            role = item.get("role") or ""
-            if role not in {"user", "assistant"}:
-                continue
-            content = item.get("content") or ""
-            if content:
-                msgs.append({"role": role, "content": content})
-        msgs.append({"role": "user", "content": question})
-        return msgs
-
-    @staticmethod
-    def _extract_final_answer(output) -> str | None:
-        if not isinstance(output, dict):
-            return None
-        msgs = output.get("messages") or []
-        for msg in reversed(msgs):
-            content = getattr(msg, "content", None)
-            if isinstance(content, str) and content.strip():
-                return content.strip()
-        return None
-
-    async def _persist_qa(
-        self,
-        *,
-        user_id: int,
-        scene_id: str,
-        session_id: int,
-        question: str,
-        answer: str,
-        citations: list[CitationItem],
-    ) -> None:
-        try:
-            await append_qa_message(user_id=user_id, scene_id=scene_id, session_id=session_id, role="user", content=question)
-            await append_qa_message(user_id=user_id, scene_id=scene_id, session_id=session_id, role="assistant", content=answer)
-        except Exception:
-            pass
-
-        await QaRecordManager().add(
-            {
-                "scene_id": scene_id,
-                "session_id": session_id,
-                "question": question,
-                "answer": answer,
-                "citations": [item.model_dump() for item in citations],
-                "insufficient_context": 0 if citations else 1,
-            }
         )
 
     async def kb_search(self, *, scene_id: str, query: str) -> str:
+        """在知识库中检索相关内容。
+
+        Args:
+            scene_id: 场景 ID。
+            query: 检索查询词。
+
+        Returns:
+            JSON 格式的检索结果，包含 snippets 和 citations。
+        """
         docs = self.vector_store.search(scene_id, query, k=6) or []
         if not docs:
             rows = await DocumentManager().query_all(
@@ -280,7 +203,13 @@ class AgentService(DomainSupportService):
             for row in rows:
                 text = (row.content or "") or (row.summary or "")
                 if text:
-                    docs.append(type("Doc", (), {"page_content": text[:1200], "metadata": {"document_id": row.id, "filename": row.filename}})())
+                    docs.append(
+                        type(
+                            "Doc",
+                            (),
+                            {"page_content": text[:1200], "metadata": {"document_id": row.id, "filename": row.filename}},
+                        )()
+                    )
 
         if not docs:
             return json.dumps({"snippets": [], "citations": [], "message": "知识库中未找到相关内容。"}, ensure_ascii=False)
@@ -308,6 +237,15 @@ class AgentService(DomainSupportService):
         return json.dumps({"snippets": snippets, "citations": citations}, ensure_ascii=False)
 
     async def generate_quiz(self, *, scene_id: str, raw_input: str) -> str:
+        """生成练习题。
+
+        Args:
+            scene_id: 场景 ID。
+            raw_input: 原始输入，格式为"知识点|题型"。
+
+        Returns:
+            生成的练习题内容。
+        """
         parts = [p.strip() for p in (raw_input or "").split("|") if p.strip()]
         topic = parts[0] if parts else raw_input
         quiz_type = parts[1] if len(parts) > 1 else "综合"
@@ -326,6 +264,15 @@ class AgentService(DomainSupportService):
         return getattr(resp, "content", str(resp))
 
     async def schedule_review(self, *, scene_id: str, concept: str) -> str:
+        """安排复习计划。
+
+        Args:
+            scene_id: 场景 ID。
+            concept: 知识点名称。
+
+        Returns:
+            安排结果描述。
+        """
         concept = (concept or "").strip()
         if not concept:
             return "请输入要加入复习计划的知识点。"
@@ -348,6 +295,15 @@ class AgentService(DomainSupportService):
         )
 
     async def update_weakness(self, *, scene_id: str, raw_input: str) -> str:
+        """更新薄弱点记录。
+
+        Args:
+            scene_id: 场景 ID。
+            raw_input: 原始输入文本。
+
+        Returns:
+            更新结果描述。
+        """
         text = (raw_input or "").strip()
         if not text:
             return "请输入要记录的薄弱点或包含知识点的文本。"
@@ -359,6 +315,16 @@ class AgentService(DomainSupportService):
         return "已更新薄弱点：" + "、".join(concepts[:5])
 
     async def evaluate_rubric(self, *, scene_id: str, eval_rubric: dict, raw_input: str) -> str:
+        """按评分规则评估用户输入。
+
+        Args:
+            scene_id: 场景 ID。
+            eval_rubric: 评分规则配置。
+            raw_input: 用户输入文本。
+
+        Returns:
+            评估结果描述。
+        """
         rubric = json.dumps(eval_rubric or {}, ensure_ascii=False)
         prompt = (
             "你是学习助手，请按评分规则对用户文本进行评分并给出改进建议。\n"
@@ -371,12 +337,29 @@ class AgentService(DomainSupportService):
 
     @staticmethod
     def web_search(*, raw_input: str) -> str:
+        """联网搜索（MVP 阶段占位实现）。
+
+        Args:
+            raw_input: 搜索关键词。
+
+        Returns:
+            提示信息。
+        """
         return (
             f"[外部资料补充请求：{raw_input}]\n"
             "MVP 阶段暂未接入实时搜索。你可以上传时政/参考资料，我会从资料里检索并总结。"
         )
 
     async def query_memory(self, *, scene_id: str, query: str) -> str:
+        """查询用户学习记忆。
+
+        Args:
+            scene_id: 场景 ID。
+            query: 查询内容。
+
+        Returns:
+            学习记录摘要。
+        """
         wps = await WeakPointManager().query_all(
             conds=[WeakPointTable.scene_id == scene_id, WeakPointTable.deleted_at.is_(None)],
             orders=[WeakPointTable.next_review_at.asc()],
@@ -404,8 +387,91 @@ class AgentService(DomainSupportService):
             return "暂无历史记忆记录。"
         return "\n".join(lines)
 
+    async def _resolve_persona(self, *, user_id: int) -> str:
+        """获取用户的 AI 人设风格。
+
+        Args:
+            user_id: 用户 ID。
+
+        Returns:
+            人设风格名称，默认"严师型"。
+        """
+        persona = "严师型"
+        try:
+            buddy = await BuddyProfileManager().query_one(
+                conds=[BuddyProfileTable.user_id == user_id, BuddyProfileTable.deleted_at.is_(None)],
+                orders=[BuddyProfileTable.id.asc()],
+            )
+            if buddy and buddy.persona:
+                persona = buddy.persona
+        except Exception:
+            pass
+        return persona
+
+    async def _extract_citations(self, scene_id: str, query: str) -> list[CitationItem]:
+        """从检索结果中提取引用信息。
+
+        Args:
+            scene_id: 场景 ID。
+            query: 查询内容。
+
+        Returns:
+            引用项列表。
+        """
+        kb_result = await self.kb_search(scene_id=scene_id, query=query)
+        kb_obj = self._safe_json_loads(kb_result)
+        citations = []
+        for c in kb_obj.get("citations", []):
+            citations.append(CitationItem(**c))
+        return citations
+
+    async def _persist_qa(
+        self,
+        *,
+        user_id: int,
+        scene_id: str,
+        session_id: str,
+        question: str,
+        answer: str,
+        citations: list[CitationItem],
+    ) -> None:
+        """持久化问答记录。
+
+        Args:
+            user_id: 用户 ID。
+            scene_id: 场景 ID。
+            session_id: 会话 ID。
+            question: 用户问题。
+            answer: AI 回答。
+            citations: 引用列表。
+        """
+        try:
+            await append_qa_message(user_id=user_id, scene_id=scene_id, session_id=session_id, role="user", content=question)
+            await append_qa_message(user_id=user_id, scene_id=scene_id, session_id=session_id, role="assistant", content=answer)
+        except Exception:
+            pass
+
+        await QaRecordManager().add(
+            {
+                "scene_id": scene_id,
+                "session_id": session_id,
+                "question": question,
+                "answer": answer,
+                "citations": [item.model_dump() for item in citations],
+                "insufficient_context": 0 if citations else 1,
+            }
+        )
+
     @staticmethod
     def _safe_json_loads(raw: str) -> dict:
+        """安全解析 JSON 字符串。
+
+        Args:
+            raw: JSON 字符串。
+
+        Returns:
+            解析后的字典，解析失败返回空字典。
+        """
         try:
             return json.loads(raw)
         except Exception:
