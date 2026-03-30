@@ -15,3 +15,4 @@ langchain-dashscope==0.1.8
 langchain-chroma==0.2.6
 langgraph==1.0.1
 pypdf==6.0.0
+jieba==0.42.1

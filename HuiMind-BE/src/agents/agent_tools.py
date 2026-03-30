@@ -19,6 +19,7 @@ from src.dao.orm.manager.review import ReviewTaskManager, WeakPointManager
 from src.dao.orm.table import DocumentTable, ReviewTaskTable, WeakPointTable
 from src.dao.vector_store import VectorStoreManager
 from src.services.base import now_ts
+from src.services.rag import RAGService
 from src.services.llm import LLMConfig, LLMProvider, LLMService
 
 
@@ -31,7 +32,7 @@ def make_search_knowledge_tool(scene_id: str):
     Returns:
         LangChain 工具实例。
     """
-    vector_store = VectorStoreManager()
+    rag_service = RAGService()
 
     @tool
     async def search_knowledge(query: str) -> str:
@@ -41,30 +42,13 @@ def make_search_knowledge_tool(scene_id: str):
         如果问题是闲聊、打招呼、或明显不需要查资料时，不要调用此工具。
 
         Args:
-            query: 检索查询词，应提炼为关键概念，不超过50字。
+            query: 检索查询词，应提炼为关键概念，保留专业术语，不超过50字。
 
         Returns:
             检索到的相关文档片段，包含来源标注。
         """
         try:
-            docs = vector_store.search(scene_id, query, k=6) or []
-            if not docs:
-                rows = await DocumentManager().query_all(
-                    conds=[DocumentTable.scene_id == scene_id, DocumentTable.deleted_at.is_(None)],
-                    orders=[DocumentTable.created_at.desc()],
-                    limit=5,
-                )
-                for row in rows:
-                    text = (row.content or "") or (row.summary or "")
-                    if text:
-                        docs.append(
-                            type(
-                                "Doc",
-                                (),
-                                {"page_content": text[:1200], "metadata": {"document_id": row.id, "filename": row.filename}},
-                            )()
-                        )
-
+            docs = await rag_service.retrieve(scene_id, query, k=6, use_rewrite=False) or []
             if not docs:
                 return json.dumps({"snippets": [], "message": "知识库中未找到相关内容。"}, ensure_ascii=False)
 

@@ -10,6 +10,8 @@
 import os
 
 import dashscope
+from langchain.embeddings import CacheBackedEmbeddings
+from langchain.storage import InMemoryByteStore
 from langchain_dashscope import DashScopeEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.embeddings.fake import FakeEmbeddings
@@ -36,8 +38,11 @@ class VectorStoreManager:
             cls._instance = super(VectorStoreManager, cls).__new__(cls)
             if settings.dashscope_api_key:
                 dashscope.api_key = settings.dashscope_api_key
-                cls._instance.embeddings = DashScopeEmbeddings(
-                    model=settings.embedding_model_name,
+                cls._instance.embeddings = CacheBackedEmbeddings.from_bytes_store(
+                    DashScopeEmbeddings(model=settings.embedding_model_name),
+                    InMemoryByteStore(),
+                    namespace=settings.embedding_model_name,
+                    query_embedding_cache=True,
                 )
             else:
                 cls._instance.embeddings = FakeEmbeddings(size=1536)
