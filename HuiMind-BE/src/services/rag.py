@@ -1,3 +1,4 @@
+import asyncio
 from typing import List, Dict, Optional
 import jieba
 
@@ -5,6 +6,7 @@ from langchain_core.documents import Document
 from langchain.retrievers import EnsembleRetriever, ContextualCompressionRetriever
 from langchain_community.retrievers import BM25Retriever
 from langchain.retrievers.document_compressors import LLMChainExtractor
+from loguru import logger
 
 from src.services.base import BaseService
 from src.services.llm import LLMService, LLMProvider, LLMConfig
@@ -129,8 +131,7 @@ class RAGService(BaseService):
 
         vector_retriever = vs.as_retriever(search_kwargs={"k": top_k})
 
-        # 构建 / 复用 BM25
-        if scene_id not in self._bm25_cache:
+        if scene_id not in self.BM25_CACHE:
             existing = vs.get(limit=1000)
 
             if not existing["documents"]:
@@ -149,9 +150,9 @@ class RAGService(BaseService):
                 tokenizer=self._tokenizer,
             )
 
-            self._bm25_cache[scene_id] = bm25
+            self.BM25_CACHE[scene_id] = bm25
 
-        bm25_retriever = self._bm25_cache[scene_id]
+        bm25_retriever = self.BM25_CACHE[scene_id]
         bm25_retriever.k = top_k
 
         return EnsembleRetriever(

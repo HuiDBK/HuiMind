@@ -16,21 +16,26 @@ import time
 from collections.abc import AsyncIterator
 from datetime import timedelta
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from loguru import logger
 
 from src.agents.agent_prompt import build_general_prompt, build_system_prompt
 from src.agents.agent_tools import build_agent_tools
 from src.agents.study_agent import AgentState, build_study_agent, run_agent_stream
+from src.dao.redis.agent_memory import (
+    build_memory_summary_for_prompt,
+    load_thread_memory,
+    save_thread_memory,
+)
 from src.dao.orm.manager.buddy import BuddyProfileManager
 from src.dao.orm.manager.document import DocumentManager
 from src.dao.orm.manager.rag import QaRecordManager
 from src.dao.orm.manager.review import ReviewTaskManager, WeakPointManager
 from src.dao.orm.manager.scene import SceneManager
 from src.dao.orm.table import BuddyProfileTable, DocumentTable, ReviewTaskTable, WeakPointTable
-from src.dao.redis.session import append_qa_message, get_qa_history
 from src.dao.vector_store import VectorStoreManager
 from src.data_schemas.api_schemas.rag import AskData, AskRequest, CitationItem
+from src.domain.agent_ops import kb_search as domain_kb_search
 from src.services.base import DomainSupportService, now_ts
 from src.services.llm import LLMConfig, LLMProvider, LLMService
 
@@ -63,17 +68,32 @@ class AgentService(DomainSupportService):
         """
         user = await self.get_default_user()
         session_id = payload.session_id or int(time.time() * 1000)
-        scene = await SceneManager().query_one(conds=[SceneManager.orm_table.scene_id == "general"])
+        scene = await SceneManager().query_one(conds=[SceneManager.orm_table.scene_id == payload.scene_id])
 
         enabled_tools = (scene.enabled_tools if scene else []) or []
         persona = await self._resolve_persona(user_id=user.id)
 
-        graph = build_study_agent(str(user.id), scene, persona)
+        scene_id = scene.scene_id if scene else "general"
+        thread_mem = await load_thread_memory(user_id=user.id, scene_id=scene_id, session_id=str(session_id))
+        redis_memory_summary = build_memory_summary_for_prompt(thread_mem)
+        prompt_context = await self._build_prompt_context(
+            user_id=user.id,
+            scene_id=scene_id,
+            redis_memory_summary=redis_memory_summary,
+        )
+
+        graph = await build_study_agent(str(user.id), scene, persona)
+        system_prompt = (
+            build_system_prompt(scene=scene, persona=persona, context=prompt_context)
+            if scene
+            else build_general_prompt(persona=persona, context=prompt_context)
+        )
         initial_state: AgentState = {
             "messages": [HumanMessage(content=payload.question)],
             "user_id": user.id,
-            "scene": scene,
+            "scene_id": scene_id,
             "persona": persona,
+            "system_prompt": system_prompt,
             "tools_used": [],
             "iteration_count": 0,
         }
@@ -89,7 +109,24 @@ class AgentService(DomainSupportService):
             if not answer_text:
                 answer_text = "抱歉，我暂时无法回答这个问题。"
 
+            try:
+                await save_thread_memory(
+                    user_id=user.id,
+                    scene_id=scene_id,
+                    session_id=str(session_id),
+                    messages=messages if messages else [HumanMessage(content=payload.question), AIMessage(content=answer_text)],
+                    summary="",
+                )
+            except Exception as exc:
+                logger.warning(f"[AgentService] save thread memory skipped: {exc}")
+
             citations = await self._extract_citations(scene.scene_id if scene else "general", payload.question)
+
+            tools_used = result.get("tools_used", [])
+            logger.info(
+                f"[AgentService] ask done scene={scene_id} session={session_id} "
+                f"tools_used={tools_used} citations={len(citations)} answer_chars={len(answer_text)}"
+            )
 
             await self._persist_qa(
                 user_id=user.id,
@@ -125,19 +162,41 @@ class AgentService(DomainSupportService):
             事件字典，包含 type、content 等字段。
         """
         user = await self.get_default_user()
-        session_id = payload.session_id or int(time.time() * 1000)
-        scene = await SceneManager().query_one(conds=[SceneManager.orm_table.scene_id == "general"])
+        session_id = payload.session_id or "default"
+        scene = await SceneManager().query_one(conds=[SceneManager.orm_table.scene_id == payload.scene_id])
 
         enabled_tools = (scene.enabled_tools if scene else []) or []
         persona = await self._resolve_persona(user_id=user.id)
 
-        graph = build_study_agent(str(user.id), scene, persona)
+        scene_id = scene.scene_id if scene else "general"
+        thread_mem = await load_thread_memory(user_id=user.id, scene_id=scene_id, session_id=str(session_id))
+        redis_memory_summary = build_memory_summary_for_prompt(thread_mem)
+        prompt_context = await self._build_prompt_context(
+            user_id=user.id,
+            scene_id=scene_id,
+            redis_memory_summary=redis_memory_summary,
+        )
+
+        graph = await build_study_agent(str(user.id), scene, persona)
+        system_prompt = (
+            build_system_prompt(scene=scene, persona=persona, context=prompt_context)
+            if scene
+            else build_general_prompt(persona=persona, context=prompt_context)
+        )
 
         answer_text = ""
         citations = []
 
         try:
-            async for event in run_agent_stream(graph, user.id, scene, payload.question, persona):
+            async for event in run_agent_stream(
+                graph,
+                user.id,
+                scene,
+                payload.question,
+                session_id,
+                persona,
+                system_prompt=system_prompt,
+            ):
                 event_type = event.get("type")
 
                 if event_type == "token":
@@ -152,6 +211,10 @@ class AgentService(DomainSupportService):
                 elif event_type == "final":
                     answer_text = event.get("content", answer_text)
                     citations = await self._extract_citations(scene.scene_id if scene else "general", payload.question)
+                    logger.info(
+                        f"[AgentService] ask_stream final scene={scene_id} session={session_id} "
+                        f"tools_used={event.get('tools_used', [])} citations={len(citations)} answer_chars={len(answer_text)}"
+                    )
                     yield {
                         "code": 0,
                         "message": "ok",
@@ -168,6 +231,17 @@ class AgentService(DomainSupportService):
             yield {"code": 1, "message": f"处理请求时发生错误：{str(e)}", "data": {"type": "error"}}
             return
 
+        try:
+            await save_thread_memory(
+                user_id=user.id,
+                scene_id=scene_id,
+                session_id=str(session_id),
+                messages=[HumanMessage(content=payload.question), AIMessage(content=answer_text)],
+                summary="",
+            )
+        except Exception as exc:
+            logger.warning(f"[AgentService] save thread memory skipped: {exc}")
+
         await self._persist_qa(
             user_id=user.id,
             scene_id=scene.scene_id if scene else "general",
@@ -176,6 +250,53 @@ class AgentService(DomainSupportService):
             answer=answer_text,
             citations=citations,
         )
+
+    async def _build_prompt_context(
+        self,
+        *,
+        user_id: int,
+        scene_id: str,
+        redis_memory_summary: str,
+    ) -> dict:
+        """构建 Layer4 学习上下文（极小注入，防止 prompt 膨胀）。"""
+        weak_points = await WeakPointManager().query_all(
+            conds=[WeakPointTable.scene_id == scene_id, WeakPointTable.deleted_at.is_(None)],
+            orders=[WeakPointTable.correct_rate.asc()],
+            limit=3,
+        )
+        pending_reviews = await ReviewTaskManager().query_all(
+            conds=[
+                ReviewTaskTable.scene_id == scene_id,
+                ReviewTaskTable.status == "pending",
+                ReviewTaskTable.deleted_at.is_(None),
+            ],
+            orders=[ReviewTaskTable.due_at.asc()],
+            limit=3,
+        )
+
+        buddy_summary = ""
+        try:
+            buddy = await BuddyProfileManager().query_one(
+                conds=[BuddyProfileTable.user_id == user_id, BuddyProfileTable.deleted_at.is_(None)],
+                orders=[BuddyProfileTable.id.asc()],
+            )
+            buddy_summary = (buddy.memory_summary if buddy else "") or ""
+        except Exception:
+            buddy_summary = ""
+
+        memory_summary = "\n".join([s for s in [buddy_summary.strip(), redis_memory_summary.strip()] if s]).strip()[:200]
+
+        return {
+            "weak_points": [
+                {"concept": wp.concept, "correct_rate": wp.correct_rate}
+                for wp in weak_points
+            ],
+            "pending_reviews": [
+                {"concept": t.concept, "due_at": t.due_at.strftime("%Y-%m-%d") if t.due_at else None}
+                for t in pending_reviews
+            ],
+            "memory_summary": memory_summary,
+        }
 
     async def kb_search(self, *, scene_id: str, query: str) -> str:
         """在知识库中检索相关内容。
@@ -187,48 +308,9 @@ class AgentService(DomainSupportService):
         Returns:
             JSON 格式的检索结果，包含 snippets 和 citations。
         """
-        docs = self.vector_store.search(scene_id, query, k=6) or []
-        if not docs:
-            rows = await DocumentManager().query_all(
-                conds=[DocumentTable.scene_id == scene_id, DocumentTable.deleted_at.is_(None)],
-                orders=[DocumentTable.created_at.desc()],
-                limit=5,
-            )
-            for row in rows:
-                text = (row.content or "") or (row.summary or "")
-                if text:
-                    docs.append(
-                        type(
-                            "Doc",
-                            (),
-                            {"page_content": text[:1200], "metadata": {"document_id": row.id, "filename": row.filename}},
-                        )()
-                    )
-
-        if not docs:
-            return json.dumps({"snippets": [], "citations": [], "message": "知识库中未找到相关内容。"}, ensure_ascii=False)
-
-        snippets = []
-        citations = []
         ctx = _RUN_CONTEXT.get()
         citations_map = (ctx or {}).get("citations") if isinstance(ctx, dict) else None
-
-        for doc in docs:
-            doc_id = int(doc.metadata.get("document_id", 0) or 0)
-            filename = str(doc.metadata.get("filename", "未知文件"))
-            quote = (doc.page_content or "")[:240]
-            snippets.append({"document_id": doc_id, "filename": filename, "content": doc.page_content[:1000]})
-            item = CitationItem(
-                document_id=doc_id,
-                source_label=filename,
-                source_locator=f"doc-{doc_id}",
-                quote=quote,
-            )
-            citations.append(item.model_dump())
-            if isinstance(citations_map, dict):
-                citations_map[(doc_id, filename)] = item
-
-        return json.dumps({"snippets": snippets, "citations": citations}, ensure_ascii=False)
+        return await domain_kb_search(scene_id=scene_id, query=query, k=6, citations_map=citations_map)
 
     async def generate_quiz(self, *, scene_id: str, raw_input: str) -> str:
         """生成练习题。
@@ -439,12 +521,8 @@ class AgentService(DomainSupportService):
             answer: AI 回答。
             citations: 引用列表。
         """
-        try:
-            await append_qa_message(user_id=user_id, scene_id=scene_id, session_id=session_id, role="user", content=question)
-            await append_qa_message(user_id=user_id, scene_id=scene_id, session_id=session_id, role="assistant", content=answer)
-        except Exception:
-            pass
-
+        # 注意：问答历史现在由 LangGraph Checkpointer 自动管理
+        # 这里只持久化到数据库用于统计分析
         await QaRecordManager().add(
             {
                 "scene_id": scene_id,

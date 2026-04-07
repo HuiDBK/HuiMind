@@ -9,18 +9,41 @@
 """
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from langchain_core.tools import tool
 from loguru import logger
 
-from src.dao.orm.manager.document import DocumentManager
 from src.dao.orm.manager.review import ReviewTaskManager, WeakPointManager
-from src.dao.orm.table import DocumentTable, ReviewTaskTable, WeakPointTable
-from src.dao.vector_store import VectorStoreManager
+from src.dao.orm.table import ReviewTaskTable, WeakPointTable
 from src.services.base import now_ts
 from src.services.rag import RAGService
 from src.services.llm import LLMConfig, LLMProvider, LLMService
+from src.domain.agent_ops import kb_search as domain_kb_search
+
+
+# Query 分类映射
+MEMORY_QUERY_PATTERNS = {
+    "weakness": ["薄弱", "弱点", "错误", "不会", "不懂", "掌握", "学得不好", "哪块不好"],
+    "review": ["复习", "复盘", "待做", "任务", "计划", "到期", "该复习"],
+    "status": ["状态", "进度", "情况", "学得怎样", "如何", "怎么样"],
+}
+
+
+def classify_query(query: str) -> str:
+    """分类查询意图。
+
+    Args:
+        query: 用户查询内容。
+
+    Returns:
+        查询类别：weakness/review/status/all
+    """
+    query_lower = query.lower()
+    for category, patterns in MEMORY_QUERY_PATTERNS.items():
+        if any(p in query_lower for p in patterns):
+            return category
+    return "all"
 
 
 def make_search_knowledge_tool(scene_id: str):
@@ -32,8 +55,6 @@ def make_search_knowledge_tool(scene_id: str):
     Returns:
         LangChain 工具实例。
     """
-    rag_service = RAGService()
-
     @tool
     async def search_knowledge(query: str) -> str:
         """在知识库中检索相关内容。
@@ -48,20 +69,9 @@ def make_search_knowledge_tool(scene_id: str):
             检索到的相关文档片段，包含来源标注。
         """
         try:
-            docs = await rag_service.retrieve(scene_id, query, k=6, use_rewrite=False) or []
-            if not docs:
-                return json.dumps({"snippets": [], "message": "知识库中未找到相关内容。"}, ensure_ascii=False)
-
-            snippets = [
-                {
-                    "document_id": int(doc.metadata.get("document_id", 0) or 0),
-                    "filename": str(doc.metadata.get("filename", "未知文件")),
-                    "content": doc.page_content[:1000],
-                }
-                for doc in docs
-            ]
-            logger.info(f"[Tool:search_knowledge] query='{query}' found {len(docs)} chunks")
-            return json.dumps({"snippets": snippets}, ensure_ascii=False)
+            result = await domain_kb_search(scene_id=scene_id, query=query, k=6, citations_map=None)
+            logger.info(f"[Tool:search_knowledge] query='{query}'")
+            return result
         except Exception as e:
             logger.error(f"[Tool:search_knowledge] error: {e}")
             return f"知识库检索失败：{str(e)}"
@@ -324,45 +334,68 @@ def make_query_memory_tool(scene_id: str):
 
     @tool
     async def query_memory(query: str) -> str:
-        """查询用户的学习记录、薄弱点和复习计划。
+        """查询用户的学习记忆（薄弱点、复习任务）。
 
-        当用户问"我之前学过什么"、"我的薄弱点有哪些"时调用。
+        当用户问及学习状态、薄弱点、复习计划时调用。
 
         Args:
-            query: 查询内容。
+            query: 查询内容，如"我的薄弱点"、"今天该复习什么"
 
         Returns:
-            学习记录摘要。
+            JSON 格式的学习状态，包含 weak_points 和 reviews 字段。
         """
         try:
-            wps = await WeakPointManager().query_all(
-                conds=[WeakPointTable.scene_id == scene_id, WeakPointTable.deleted_at.is_(None)],
-                orders=[WeakPointTable.next_review_at.asc()],
-                limit=10,
-            )
-            tasks = await ReviewTaskManager().query_all(
-                conds=[
-                    ReviewTaskTable.scene_id == scene_id,
-                    ReviewTaskTable.status == "pending",
-                    ReviewTaskTable.deleted_at.is_(None),
-                ],
-                orders=[ReviewTaskTable.due_at.asc()],
-                limit=10,
-            )
-            lines = []
-            if wps:
-                lines.append("薄弱点：")
-                for wp in wps[:6]:
-                    lines.append(f"- {wp.concept}（下次复习：{wp.next_review_at.strftime('%Y-%m-%d')}）")
-            if tasks:
-                lines.append("待复习：")
-                for t in tasks[:6]:
-                    lines.append(f"- {t.concept}（到期：{t.due_at.strftime('%Y-%m-%d')}）")
-            logger.info(f"[Tool:query_memory] query='{query}'")
-            return "\n".join(lines) if lines else "暂无历史记忆记录。"
+            # 分类查询意图
+            query_type = classify_query(query)
+
+            result = {
+                "query_type": query_type,
+                "weak_points": [],
+                "reviews": [],
+            }
+
+            # 查询薄弱点
+            if query_type in ["weakness", "status", "all"]:
+                wps = await WeakPointManager().query_all(
+                    conds=[WeakPointTable.scene_id == scene_id, WeakPointTable.deleted_at.is_(None)],
+                    orders=[WeakPointTable.correct_rate.asc()],
+                    limit=5,
+                )
+                result["weak_points"] = [
+                    {
+                        "concept": wp.concept,
+                        "correct_rate": wp.correct_rate,
+                        "mastery_level": wp.mastery_level,
+                        "next_review": wp.next_review_at.strftime("%Y-%m-%d") if wp.next_review_at else None,
+                    }
+                    for wp in wps
+                ]
+
+            # 查询复习任务
+            if query_type in ["review", "status", "all"]:
+                tasks = await ReviewTaskManager().query_all(
+                    conds=[
+                        ReviewTaskTable.scene_id == scene_id,
+                        ReviewTaskTable.status == "pending",
+                        ReviewTaskTable.deleted_at.is_(None),
+                    ],
+                    orders=[ReviewTaskTable.due_at.asc()],
+                    limit=5,
+                )
+                result["reviews"] = [
+                    {
+                        "concept": t.concept,
+                        "due_at": t.due_at.strftime("%Y-%m-%d") if t.due_at else None,
+                        "is_overdue": t.due_at < datetime.now() if t.due_at else False,
+                    }
+                    for t in tasks
+                ]
+
+            logger.info(f"[Tool:query_memory] query='{query}' type={query_type}")
+            return json.dumps(result, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[Tool:query_memory] error: {e}")
-            return f"查询失败：{str(e)}"
+            return json.dumps({"error": str(e), "weak_points": [], "reviews": []}, ensure_ascii=False)
 
     return query_memory
 
@@ -381,7 +414,7 @@ def build_agent_tools(scene_id: str, enabled_tools: list[str], eval_rubric: dict
     all_tools = {
         "qa": lambda: make_search_knowledge_tool(scene_id),
         "quiz": lambda: make_generate_quiz_tool(scene_id),
-        "memory": lambda: make_update_weakness_tool(scene_id),
+        "update_weakness": lambda: make_update_weakness_tool(scene_id),
         "rubric_eval": lambda: make_rubric_eval_tool(eval_rubric or {}),
         "schedule": lambda: make_schedule_review_tool(scene_id),
         "crawler": lambda: make_web_search_tool(),

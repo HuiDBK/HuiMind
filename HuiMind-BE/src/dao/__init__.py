@@ -33,6 +33,10 @@ async def init_orm_tables(db_client):
     from src.dao.orm import table  # noqa: F401
 
     async with db_client.db_engine.begin() as conn:
+        # 说明：
+        # 当前 MVP 使用 sqlite+create_all 方式初始化表结构，没有迁移系统。
+        # 在开发/未上线阶段，允许 drop_all -> create_all 以适配表结构调整（如新增/删除列）。
+        await conn.run_sync(BaseOrmTable.metadata.drop_all)
         await conn.run_sync(BaseOrmTable.metadata.create_all)
 
 

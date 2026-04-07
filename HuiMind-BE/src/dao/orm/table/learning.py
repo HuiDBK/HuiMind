@@ -16,7 +16,7 @@ class SceneTable(BaseOrmTableWithTS):
     description: Mapped[str] = mapped_column(String(255), comment="场景描述")
     enabled_tools: Mapped[list[str]] = mapped_column(JSON, default=list, comment="启用工具列表")
     system_prompt: Mapped[str] = mapped_column(Text, default="", comment="系统提示词")
-    skill_prompt: Mapped[str] = mapped_column(Text, default="", comment="场景技能提示词")
+    rag_policy: Mapped[dict] = mapped_column(JSON, default=dict, comment="RAG 策略配置")
     eval_rubric: Mapped[dict] = mapped_column(JSON, default=dict, comment="评分规则配置")
 
 

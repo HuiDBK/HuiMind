@@ -1,6 +1,8 @@
-"""Redis session helpers."""
+"""Redis session helpers.
 
-import json
+该模块提供 Redis 会话相关的辅助函数。
+注意：问答历史现在由 LangGraph Checkpointer 自动管理，不再使用此模块。
+"""
 
 import redis.asyncio as redis
 
@@ -15,24 +17,6 @@ _client = redis.Redis(
 )
 
 
-def _qa_key(*, user_id: int, scene_id: str, session_id: int) -> str:
-    return f"session:qa:{user_id}:{scene_id}:{session_id}"
-
-
-async def append_qa_message(*, user_id: int, scene_id: str, session_id: int, role: str, content: str) -> None:
-    key = _qa_key(user_id=user_id, scene_id=scene_id, session_id=session_id)
-    await _client.rpush(key, json.dumps({"role": role, "content": content}, ensure_ascii=False))
-    await _client.expire(key, 60 * 60 * 24 * 14)
-
-
-async def get_qa_history(*, user_id: int, scene_id: str, session_id: int, limit: int = 10) -> list[dict]:
-    key = _qa_key(user_id=user_id, scene_id=scene_id, session_id=session_id)
-    raw = await _client.lrange(key, max(0, -limit * 2), -1)
-    items: list[dict] = []
-    for entry in raw:
-        try:
-            items.append(json.loads(entry))
-        except Exception:
-            continue
-    return items
+# 问答历史功能已迁移到 LangGraph Checkpointer
+# 保留 _client 供其他模块使用
 
